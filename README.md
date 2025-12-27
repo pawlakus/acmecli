@@ -89,6 +89,9 @@ https://acme-v02.api.letsencrypt.org/directory
    action by both keys. Once completed, ACME server updates the account to point
    to the new public key while preserving the same account URI.
 
+6. **Lost private key** - Once you lost your private key, you can't re-key anymore.
+   Your account_uri is lost forever, and you can't deactivate it either.
+   Create a new assymetric key and new ACMEv2 account.
 
 ## Create account
 
