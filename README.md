@@ -20,11 +20,17 @@ Usage:
 acmecli.py [-a ACME_URL] -k key.(pem|json) account show [-d|-detail]
     Displays your account URI, status, and other details reported by the ACMEv2 server.
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account create --help
+acmecli.py [-a ACME_URL] -k key.(pem|json) account create \
+  --eab-kid EAB_KEYID
+  --eab-hmac-key EAB_HMAC_KEY_BASE64
+  --eab-alg {HS256,HS384,HS512}
+  --agree-tos
+
     Creates a new ACMEv2 account. Before running this, you must generate a key file.
 
 acmecli.py [-a ACME_URL] -k key.(pem|json) account update \
-[mailto:user@example.com mailto:admin@example.net ... | clear]
+  [mailto:user@example.com mailto:admin@example.net ... | clear]
+
     Updates your contact details. Contacts must be provided as a list.
     Prefix each contact with `mailto:`.
     WARNING: The magic word `clear` will remove all current contacts.
