@@ -468,52 +468,11 @@ def cli_key_thumbprint(client: ACMEClient, args):
     thumbprint = client.thumbprint()
     print(f"Your public thumbprint: {thumbprint}")
     message = """
-Your thumbprint is calculated from the public portion of your private asymetric key.
-Thumbprint is not a secret and revealing it does not compromise your ACME account.
-You can use it to setup a stateless http-01 challenge, as per RFC8555 Section 8.3
-the token from the challenge is part of the URL accessed. Therefore, challenge can be
-pre-computed entirely for your private key and pass any challenge automatically.
 
-When to use:
-* if you want to run acme client on a different machine than serving your http traffic,
-* when you have traffic distributed over multiple machines and uploading a challenge
-  file to all of them would be error-prone and unreliable,
-* perfect if you have LoadBalancer in front of multiple web servers that auto-scale
-* perfect for Openshift /  Kubernetes, where you don't have to modify
-  Ingress/HTTPRoute/Route object to pass the challenge,
-* perfect if you operate a small geo-distributed CDN with lots of web servers
-  and you need to be sure all of them always pass the challenge.
+   Thumbprint - A hash of the public key (per RFC-8555 § 8.3). It is not secret;
+   anyone may know it without compromising the account. It is retrived from a
+   *public* component of your asymmetric key.
 
-Risk:
-When implemented incorrectly, you are risking cross-site vulnerability. Examples
-provided bellow do not allow cross-site HTML tags by enforcing a strict regexp.
-
-How to set this up:
-nginx:
-    http {{
-    ...
-        server {{
-        listen 80;
-        ...
-            location ~ ^/\.well-known/acme-challenge/([-_a-zA-Z0-9]+)$ {{
-            default_type text/plain;
-            return 200 "$1.{0}";
-            }}
-        ...
-        }}
-    }}
-
-apache2:
-    <VirtualHost *:80>
-        ...
-        <LocationMatch "/.well-known/acme-challenge/(?<challenge>[-_a-zA-Z0-9]+)">
-            RewriteEngine On
-            RewriteRule "^([-_a-zA-Z0-9]+)$" "$1" [E=challenge:$1]
-            ErrorDocument 200 "%{{ENV:MATCH_CHALLENGE}}.{0}"
-            RewriteRule ^ - [L,R=200]
-        </LocationMatch>
-        ...
-    </VirtualHost>
 """.format(thumbprint)
     if args.details:
         print(message)

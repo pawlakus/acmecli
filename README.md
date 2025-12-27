@@ -74,7 +74,7 @@ https://acme-v02.api.letsencrypt.org/directory
    an *account URI* that is permanently bound to the *public* part of your key.
 
 4. **Thumbprint** – A hash of the public key (per RFC 8555 § 8.3). It is **not
-   secret**; anyone may know it without compromising the account. It is rerived
+   secret**; anyone may know it without compromising the account. It is retrived
    from a **public** component of your asymmetric key.
 
 5. **Re-keying** - You can replace your assymetric private key to the same
