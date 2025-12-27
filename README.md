@@ -12,6 +12,24 @@ This tool do not create any `key.pem` files automatically. To maintain a simple 
 
 Currently, `acmecli.py` does not obtain certificates on its own. Adding this functionality is planned for a future release. Please note that as this project is in an early stage, the API is not frozen and may change without notice.
 
+## Why?
+
+* Easily obtain `thumbprint` for your current ACMEv2 account and setup stateless `http-01` challenge.
+
+* Easily obtain `account_uri` and use it in your `CAA` records:
+  ```
+  example.org         CAA 128 issue "letsencrypt.org;accounturi=https://otherca.com/acct/123456"
+  ```
+
+* To use `account_uri` for future `dns-persist-01` challenge,
+  [see this announcement from Let's Encrypt](https://letsencrypt.org/2025/12/02/from-90-to-45#making-automation-easier-with-a-new-dns-challenge-type)
+
+* To convert, re-use, deactivate and merge many ACMEv2 accounts under one
+  *privatekey* and *account_uri* to have less DNS records.
+
+* This ACMEv2 client DOES NOT issue any certificates (yet).
+
+
 ## Usage
 
 ```text
@@ -169,7 +187,7 @@ For `CertManager`, generate Kubernetes Secret and Issuer objects - *TODO*.
     alter Ingress?Investigate
 * certainly CertManager does not support dns-persitent-01.
 
-## Stateless http-01
+# Stateless http-01
 
 Stateless verification lets any web server answer the ACME `http‑01` challenge
 for your ACME account without writing a temporary file. The response is simply
@@ -216,7 +234,7 @@ acmecli.py -k privatekey.pem key thumbprint
 Your public thumbprint: wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
 ```
 
-### Nginx Example
+## Nginx Example
 
 ```nginx
 
@@ -226,7 +244,7 @@ Your public thumbprint: wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
     }
 ```
 
-### Apache Example
+## Apache Example
 
 ```apache
 
@@ -242,7 +260,7 @@ Your public thumbprint: wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
 </VirtualHost>
 ```
 
-### HAProxy Example
+## HAProxy Example
 
 ```haproxy
 global
@@ -254,32 +272,31 @@ frontend web
     http-request return status 200 content-type text/plain lf-string "%[path,field(-1,/)].${ACCOUNT_THUMBPRINT}\n" if { path_reg '^/.well-known/acme-challenge/[-_a-zA-Z0-9]+$' }
 ```
 
-### Manually tst the challenge
+## Manually test the challenge
 
-If you see the following output on your web server *example.com*, your are
-readyto pass `http-01` challenge stetelessly with your acme account.
+If you see the following output on your web server **example.com**, you are
+ready to pass the `http-01` challenge **statelessly** with your ACME account.
 
-
-```
+```bash
 curl -s http://example.com/.well-known/acme-challenge/acme-secret-challenge-token
 
 acme-secret-challenge-token.wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
 ```
 
-It does not matter what value your put under `acme-secret-challenge-token`,
-you have to get it back on the fly in the format `<token>.<key-thumbprint>`.
-ACMEv2 server will issue a request to this *FQDN* and obtains a correct answer
-for itself, generated on the fly by your web server.
+It does not matter what value you put under `acme-secret-challenge-token`; you
+must return it on‑the‑fly in the format `<token>.<key-thumbprint>`. The ACMEv2
+server will request this *FQDN* and expect a correctly formatted response, which
+your web server generates dynamically.
 
 
-## Stateless dns-persist-01
+# Stateless dns-persist-01
 
 The `dns-persist-01` challenge (defined in `draft-ietf-acme-dns-persist`) allows
 for domain control validation via a **persistent** DNS TXT record. Unlike
 `dns-01`, which requires updating DNS records for every challenge,
 `dns-persist-01` allows you to set the record once and reuse it forever.
 
-### Rationale for Account Reuse
+## Rationale for Account Reuse
 
 Because the persistent DNS record must explicitly bind the domain to a specific
 ACME account (via the `accounturi` parameter), re-using the same ACME account
@@ -287,7 +304,7 @@ across your infrastructure becomes highly beneficial. It avoids the need to
 provision separate DNS records for every acme client instance requesting
 certificates for the same domain or subdomain.
 
-### Setup Instructions
+## Setup Instructions
 
 1.  Retrieve your Account URI:
 
