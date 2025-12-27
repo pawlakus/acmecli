@@ -18,7 +18,7 @@ Currently, `acmecli.py` does not obtain certificates on its own. Adding this fun
 
 * Easily obtain `account_uri` and use it in your `CAA` records:
   ```
-  example.org.    600    CAA 0 issue "letsencrypt.org;accounturi=https://acme-staging-v02.api.letsencrypt.org/acme/acct/123456"
+  example.org.    600 IN    CAA 0 issue "letsencrypt.org;accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/123456"
   ```
 
 * To use `account_uri` for future `dns-persist-01` challenge,
