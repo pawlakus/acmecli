@@ -1,6 +1,6 @@
 # acmecli.py
 
-The `acmecli.py` tool is a lightweight client focused on ACMEv2 account management. It enables you to create, inspect, update, rekey, and deactivate your account. It also assists in configuring stateless challenges, specifically `http-01` and the experimental `dns-persist-01`.
+The `acmecli.py` tool is a lightweight client focused on ACMEv2 account management. It allows you to create, inspect, update, rekey, and deactivate your ACMEv2 account. It also assists in configuring stateless challenges, specifically `http-01` and the experimental `dns-persist-01`.
 
 You can use this tool to migrate between ACME clients or share a single ACME account across multiple clients or machines. The rationale behind ACME account reuse is detailed in the section **Stateless dns-persist-01**.
 
@@ -25,9 +25,9 @@ Currently, `acmecli.py` does not obtain certificates on its own. Adding this fun
   [see this announcement from Let's Encrypt](https://letsencrypt.org/2025/12/02/from-90-to-45#making-automation-easier-with-a-new-dns-challenge-type)
 
 * To convert, re-use, deactivate and merge many ACMEv2 accounts under one
-  *privatekey* and *account_uri* to have less DNS records.
+  `privatekey` and `account_uri` to minimize DNS `CAA` records count.
 
-* This ACMEv2 client DOES NOT issue any certificates (yet).
+* This ACMEv2 client **DOES NOT issue** any certificates (yet).
 
 
 ## Usage
@@ -85,35 +85,45 @@ https://acme-v02.api.letsencrypt.org/directory
 
 ## ACMEv2 Account Basics
 
-1. **Key generation** - The user creates an asymmetric private key (RSA, EC).
+1. **Key generation** - The user creates an **asymmetric private key** (RSA, EC).
 
-2. **Key parts** - The key contains a **private** component (kept secret) and a
-   **public** component (derived from the private part).
+2. **Key parts** - The assymetric key contains a **private** component (kept
+   secret) and a **public** component (mathematically derived from the private
+   part). For simplicity, we will call them `private key` and `public key`,
+   respectivelly, however: on disk you store only the `private key`.
 
-3. **Secrets** - Your **private** key component is used to sign all communication,
-   but is never revealed to anybody, including ACMEv2 server. You only pass the
-   **public** component. Nobody except you knows your private key.
+3. **Secrets** - Your **private** key component - `private key` - is used to
+   sign all communication, but is never revealed to anybody, including ACMEv2
+   server. You only pass the **public** component - `public key`. Nobody except
+   you knows your private key. ACMEv2 server use your `public key` to validate
+   your signatures as a proof you actually do have your `private key`.
 
 3. **Account URI** - When you create new ACMEv2 account, the ACME server assigns
-   an *account URI* that is permanently bound to the *public* part of your key.
+   an `account_uri` that is bound to the *public* part of your key - `public key`.
 
-4. **Thumbprint** - A hash of the public key (per RFC 8555 § 8.3). It is **not
-   secret**; anyone may know it without compromising the account. It is retrived
-   from a **public** component of your asymmetric key.
+4. **Thumbprint** - A hash of the `public key` (per RFC 7638). It is **not
+   secret**; anyone in the world may know it without compromising the account.
+   It is computed from a **public** component of your asymmetric key.
 
-5. **Re-keying** - You can replace your assymetric private key to the same
-   ACMEv2 *account URI* but your *Thumbprint* will change as a result. For this
-   operation you need both your old and new private key to cross-sign this
-   action by both keys. Once completed, ACME server updates the account to point
-   to the new public key while preserving the same account URI.
+5. **Re-keying** - You can replace your assymetric `private key` to the same
+   ACMEv2 `account URI` but your `thumbprint` will change as a result. For this
+   operation **you need both your old and new** `private key` to cross-sign this
+   action by **both keys**. Once completed, ACME server updates the account to
+   point to the new `public key` while preserving the same `account URI`.
 
-6. **Private key lost** - Once you lost your private key, you can't *rekey* anymore.
-   Your *account_uri* is lost forever, you can't *deactivate* it either.
-   Create a new assymetric key and new ACMEv2 account.
+6. **Private key lost** - Once you lost your `private key`, you can not **rekey** anymore.
+   Your `account_uri` is lost forever, you also can not **deactivate** it either.
+   Create a new `assymetric private key` and a new ACMEv2 account.
+
+7. This `acmecli.py` uses your **assymetric** `private key` for all operations but
+   the **private** component never leaves your machine. On disk, you only store
+   a `PEM` file that is the `private key`, or a Certbot `JSON` file that contains both
+   **private and public** component pre-computed. **Never share or publish your**
+   `key.pem` or `key.json` **!!!**
 
 ## Create account
 
-This tool does not write files to disk. You must generate your private key manually before creating an account.
+This tool does not write files to disk. You must generate your private key manually before creating an account. Use `openssl` version `3.x` or any derivative, like `libressl`, `aws-lc`, etc.
 
 ```bash
 # RSA key (Standard compatibility)
@@ -132,27 +142,40 @@ openssl ecparam -name secp521r1 -noout -genkey -out p521.pem
 openssl genpkey -algorithm ed25519 -out ed25519.pem
 ```
 
-*Note: Most ACMEv2 servers widely support `RSA` and `P-256`.*
+*Note: Most ACMEv2 servers widely support `RSA` and `P-256`. Others may not work.*
 
-After generating the key, create your account on the ACMEv2 server:
+After generating the key, here is an example to create your new ACMEv2 account
+with two contacts:
+
 ```bash
-acmecli.py -k yourkey.pem account create --contact mailto:admin@example.com
+acmecli.py -k yourkey.pem account create mailto:admin@example.com mailto:noc@example.net
 ```
+*Note: prefix your contact mail with **mailto:** - this is part of the RFC 8555 specification.*
 
-## Rekey account
+## Re-key your ACMEv2 account
 
-If you need to change your private key (key rotation) without losing your account_uri, generate a `newkey.pem` using OpenSSL (see above). It does not need to be the same algorithm as the previous key. Then, rekey your account with a new key:
+If you need to change your `private key` (key rotation) without losing your
+`account_uri`, generate a `newkey.pem` using `openssl` (see above). It does not
+need to be the same algorithm as the previous private key. You can swap `RSA`
+for `EC` or vice versa.
+
+Then, **rekey** your account with a `new private key`:
 
 ```bash
 acmecli.py -k oldkey.pem account rekey newkey.pem
 ```
 
+For this operation, `acmecli.py` needs to prove you have both your **old and
+new** private keys.
+
 ## Private key conversion
 
-Different ACME clients require different private key formats. For example, `certbot` uses JSON Web Keys (JWK), while `lego`, `acme.sh`, and `uacme` typically use PEM encoded keys.
+Different ACME clients require different `private key` formats. For example,
+`certbot` uses **JSON Web Keys** (JWK), while `lego`, `acme.sh`, and `uacme` and
+most others use `PEM` encoded private keys.
 
 ### Converting for Certbot
-To migrate a PEM key to Certbot, convert it to JSON:
+To migrate a `PEM` `private key` to Certbot `JWK`, convert it to `JSON`:
 
 ```bash
 acmecli.py -k private.pem key convert json > private_key.json
@@ -165,45 +188,45 @@ required by Certbot. TODO: provide detailed instruction, on how to import
 privatekey into certbot reliably*
 
 ### Converting for Lego or uacme
-To migrate a Certbot JWK key to a client that supports PEM:
+To migrate a Certbot `JWK` `private key` to a client that supports `PEM`:
 
 ```bash
 acmecli.py -k private_key.json key convert pem > account.key
 ```
 
-For `uacme`, place the resulting PEM file in `/etc/uacme.d/private/key.pem`.
+For `uacme`, place the resulting `PEM` file in `/etc/uacme.d/private/key.pem`.
 
-* uacme supports hook scripts thay supports any challenge by the user himself.
+* `uacme` supports hook scripts thay supports any challenge by the user himself.
 
 For `lego`, place the resulting PEM file in `.lego/accounts/` - *TODO*
 
-* Supports http-01 stateless by asking lego to write http challenge to webroot
-  anywhere, it does not matter it writes a file, as long as your webservers are
+* Supports `http-01 stateless` by asking lego to write http challenge anywhere,
+  it does not matter where it writes a file, as long as your webservers are
   prepared upfront.
 
-For `CertManager`, generate Kubernetes Secret and Issuer objects - *TODO*.
+For `CertManager`, generate `Kubernetes` `Secret` and `Issuer` objects - *TODO*.
 
-* does CertManager supports stateless http-01 without trying to
-    alter Ingress?Investigate
-* certainly CertManager does not support dns-persitent-01.
+* does `CertManager` supports `stateless http-01` without trying to
+    alter Ingress? *TODO: Investigate*
+* certainly `CertManage`r does not support `dns-persitent-01`.
 
 # Stateless http-01
 
 Stateless verification lets any web server answer the ACME `http‑01` challenge
-for your ACME account without writing a temporary file. The response is simply
+for your ACME account without writing a temporary file. The response is simply:
 
 ```
 <token>.<key‑thumbprint>
 ```
 
-where the *thumbprint* is derived from the **public** part of your account key
-and never changes, and *token* is part of the **GET** URI request send by ACMEv2
+where the `thumbprint` is derived from the **public** part of your account key
+and never changes, and `token` is part of the **GET** `URI` request send by ACMEv2
 to your web server(s).
 
-**Thumbprint** is not a secret and revealing it to the whole World does not
-compromise your ACME account.
+**Thumbprint** is not a secret and revealing it to the whole world does not
+compromise your `private key` or your ACMEv2 account.
 
-When to use:
+## When to use
 
 * ACMEv2 client runs on a different machine than the HTTP server
 
@@ -217,16 +240,35 @@ When to use:
 
 * Kubernetes / OpenShift – no Ingress/HTTPRoute modifications required
 
-* geo‑distributed CDN – every edge node can answer the challenge all the time.
+* geo‑distributed CDN – every edge node can answer the challenge on the fly.
 
 
-Cross site scripting vulnerability risk:
+## Cross site scripting vulnerability risk
 
 * Incorrect implementation can introduce XSS. The examples below enforce a
-  strict regexp and do not allow HTML tags.
+  strict regexp for base64url alphabet that do not allow HTML tags.
+
+* All examples [are copied from acme.sh wiki](https://github.com/acmesh-official/acme.sh/wiki/Stateless-Mode).
+
+* See [RFC 8555, section 8.3](https://datatracker.ietf.org/doc/html/rfc8555#section-8.3):
 
 
-First, get your thumbprint:
+   Note that because the token appears both in the request sent by the
+   ACME server and in the key authorization in the response, it is
+   possible to build clients that copy the token from request to
+   response.  Clients should avoid this behavior because it can lead to
+   cross-site scripting vulnerabilities; instead, clients should be
+   explicitly configured on a per-challenge basis.
+   
+   **A client that does copy tokens from requests to responses MUST validate
+   that the token in the request matches the token syntax above (e.g., that it
+   includes only characters from the base64url alphabet).**
+
+* That is why every example bellow uses `([-_a-zA-Z0-9]+)` as their regexp.
+
+## Configure
+
+First, get your `thumbprint` for your `private key`:
 
 ```bash
 acmecli.py -k privatekey.pem key thumbprint
@@ -237,17 +279,18 @@ Your public thumbprint: wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
 ## Nginx Example
 
 ```nginx
-
+server {
+    listen 80 default;
     location ~ ^/\.well-known/acme-challenge/([-_a-zA-Z0-9]+)$ {
       default_type text/plain;
       return 200 "$1.YOUR-THUMBPRINT-HERE";
     }
+}
 ```
 
 ## Apache Example
 
 ```apache
-
 <VirtualHost *:80>
     ...
     <LocationMatch "/.well-known/acme-challenge/(?<challenge>[-_a-zA-Z0-9]+)">
@@ -278,22 +321,23 @@ If you see the following output on your web server **example.com**, you are
 ready to pass the `http-01` challenge **statelessly** with your ACME account.
 
 ```bash
-curl -s http://example.com/.well-known/acme-challenge/acme-secret-challenge-token
+curl -s http://example.com/.well-known/acme-challenge/Anything-you-type-here-must-return
 
-acme-secret-challenge-token.wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
+Anything-you-type-here-must-return.wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
 ```
 
-It does not matter what value you put under `acme-secret-challenge-token`; you
-must return it on‑the‑fly in the format `<token>.<key-thumbprint>`. The ACMEv2
-server will request this *FQDN* and expect a correctly formatted response, which
-your web server generates dynamically.
+It does not matter what value you put under
+`/.well-known/acme-challenge/<token>`; you webserver must return it on‑the‑fly
+in the format `<token>.<key-thumbprint>`. The ACMEv2 `CA` will request this
+*FQDN* and expect a correctly formatted response, which your web server
+generates on the fly.
 
 
 # Stateless dns-persist-01
 
 The `dns-persist-01` challenge (defined in `draft-ietf-acme-dns-persist`) allows
-for domain control validation via a **persistent** DNS TXT record. Unlike
-`dns-01`, which requires updating DNS records for every challenge,
+for domain control validation via a **persistent** DNS `TXT` record. Unlike
+`dns-01`, which requires updating `DNS` records for every challenge,
 `dns-persist-01` allows you to set the record once and reuse it forever.
 
 ## Rationale for Account Reuse
@@ -308,8 +352,8 @@ certificates for the same domain or subdomain.
 
 1.  Retrieve your Account URI:
 
-    Use `acmecli.py` to find the unique URI for your account. Your ACMEv2
-    account is tied to the public portion of your private assymetric key:
+    Use `acmecli.py` to find the `unique_uri` for your account. Your ACMEv2
+    account is tied to the **public portion** of your private assymetric key:
 
     ```bash
     acmecli.py -k privatekey.pem account show
@@ -319,7 +363,7 @@ certificates for the same domain or subdomain.
 
 2.  Provision the DNS Record:
 
-    Create a TXT record at `_validation-persist.<your-domain>`. The value must
+    Create a `TXT` record at `_validation-persist.<your-domain>`. The value must
     match the format defined in the draft, referencing the CA's issuer domain
     and your `accounturi`.
 
