@@ -61,7 +61,7 @@ https://acme-v02.api.letsencrypt.org/directory
 
 ## ACMEv2 Account Basics
 
-1. **Key generation** – The client creates an asymmetric private key (RSA, EC).
+1. **Key generation** – The user creates an asymmetric private key (RSA, EC).
 
 2. **Key parts** – The key contains a **private** component (kept secret) and a
    **public** component (derived from the private part).
