@@ -211,18 +211,23 @@ certificates for the same domain or subdomain.
 
 1.  Retrieve your Account URI:
 
-    Use `acmecli.py` to find the unique URI for your private key.
+    Use `acmecli.py` to find the unique URI for your account. Your ACMEv2
+    account is tied to the public portion of your private assymetric key:
+
     ```bash
-    acmecli.py -k account.key account show
+    acmecli.py -k privatekey.pem account show
 
     Account URI: https://acme-staging-v02.api.letsencrypt.org/acme/acct/EXAMPLE12345
     ```
 
 2.  Provision the DNS Record:
 
-    Create a TXT record at `_validation-persist.<your-domain>`. The value must match the format defined in the draft, referencing the CA's issuer domain and your `accounturi`.
+    Create a TXT record at `_validation-persist.<your-domain>`. The value must
+    match the format defined in the draft, referencing the CA's issuer domain
+    and your `accounturi`.
 
     *Example for "example.com" using Let's Encrypt:*
+
     ```text
     _validation-persist.example.com. IN TXT "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/EXAMPLE12345"
     ```
