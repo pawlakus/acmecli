@@ -59,6 +59,31 @@ ACME_URL default value: letsencrypt.org production ACMEv2:
 https://acme-v02.api.letsencrypt.org/directory
 ```
 
+## ACMEv2 Account Basics
+
+1. **Key generation** – The client creates an asymmetric private key (RSA, EC).
+
+2. **Key parts** – The key contains a **private** component (kept secret) and a
+   **public** component (derived from the private part).
+
+3. **Secrets** - Your **private** key component is used to sign all communication,
+   but is never revealed to anybody, including ACMEv2 server. You only pass the
+   **public** component. Nobody except you knows your private key.
+
+3. **Account URI** – When you create new ACMEv2 account, the ACME server assigns
+   an *account URI* that is permanently bound to the *public* part of your key.
+
+4. **Thumbprint** – A hash of the public key (per RFC 8555 § 8.3). It is **not
+   secret**; anyone may know it without compromising the account. It is rerived
+   from a **public** component of your asymmetric key.
+
+5. **Re-keying** - You can replace your assymetric private key to the same
+   ACMEv2 *account URI* but your *Thumbprint* will change as a result. For this
+   operation you need both your old and new private key to cross-sign this
+   action by both keys. Once completed, ACME server updates the account to point
+   to the new public key while preserving the same account URI.
+
+
 ## Create account
 
 This tool does not write files to disk. You must generate your private key manually before creating an account.
@@ -133,18 +158,46 @@ For `CertManager`, generate Kubernetes Secret and Issuer objects - *TODO*.
 
 ## Stateless http-01
 
-Stateless verification allows many web servers to answer ACME `http-01`
-challenges without writing temporary files (tokens) to the disk. This is ideal
-for immutable infrastructure, containers, or multi-server clusters with Load
-Balancer and auto-scalling group in front. Ensuring a file is reliably written
-to all machines would be challenging, error prone and unreliable. It is also a
-good option in Kubernetes, where your acme client does not have to alter / edit
-your `Ingress` or `HTTPRoute` objects.
+Stateless verification lets any web server answer the ACME `http‑01` challenge
+for your ACME account without writing a temporary file. The response is simply
 
-The `http-01` response is constructed as `token` + `.` + `key_thumbprint`. Since
-the thumbprint represents your public portion of your account key, it is static.
-The web server only needs to echo the token requested in the URL, followed by
-your static thumbprint.
+```
+<token>.<key‑thumbprint>
+```
+
+where the *thumbprint* is derived from the **public** part of your account key
+and never changes, and *token* is part of the **GET** URI request send by ACMEv2
+to your web server(s).
+
+Your thumbprint is calculated from the public portion of your private asymetric
+key. Thumbprint is not a secret and revealing it does not compromise your ACME
+account. You can use it to setup a stateless http‑01 challenge, as per RFC8555
+Section 8.3 the token from the challenge is part of the URL accessed. Therefore,
+challenge can be pre‑computed entirely for your private key and pass any
+challenge automatically.
+
+When to use:
+
+* ACMEv2 client runs on a different machine than the HTTP server
+
+* ACMEv2 client runs by different Team than who is managing the HTTP server
+
+* ACMEv2 client does not have write permissions to
+  `/.well-known/acme-challenge/` or syncing it reliably across different servers
+  would be unreliable and error prone.
+
+* traffic is load‑balanced across many servers – no need to sync files
+
+* Kubernetes / OpenShift – no Ingress/HTTPRoute modifications required
+
+* geo‑distributed CDN – every edge node can answer the challenge all the time.
+
+
+Cross site scripting vulnerability risk:
+
+* Incorrect implementation can introduce XSS. The examples below enforce a
+  strict regexp and do not allow HTML tags.
+
 
 First, get your thumbprint:
 
