@@ -20,8 +20,17 @@ except ImportError:
 class ACMEError(Exception):
     pass
 
-class AccountNotFound(ACMEError):
+class cliMustAccept(ACMEError):
     pass
+
+class cliMissingArgument(ACMEError):
+    pass
+class externalAccountRequired(ACMEError):
+    pass
+class accountDoesNotExist(ACMEError):
+    pass
+
+
 class ACMEClient:
     def __init__(self, key_path, directory_url="https://acme-v02.api.letsencrypt.org/directory"):
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
@@ -156,21 +165,32 @@ class ACMEClient:
         else:
             return None, ""
 
-    def _get_account_url(self):
+    def get_account(self):
         if not self.directory:
             self._get_directory()
+        self.logger.debug("Obtaining account.")
         payload = {"onlyReturnExisting": True}
         resp = self._request("POST", self.directory['newAccount'], payload, allow_redirects=False)
         if resp.status_code not in [200, 201]:
             error, error_msg = self._get_error(resp)
             if error == 'accountDoesNotExist':
-                raise AccountNotFound(f"{error_msg}")
+                raise accountDoesNotExist(f"{error}: {error_msg}")
             else:
                 raise ACMEError(f"Failed to retrieve account: {error}: {error_msg}")
         return resp.headers.get('Location'), resp.json()
 
     def thumbprint(self):
         return self.jwk.thumbprint()
+
+    def get_metadata(self):
+        if not self.directory:
+            self._get_directory()
+        return {
+            "url": self.directory_url,
+            "terms_of_service_url": self.terms_of_service_url,
+            "external_account_required": self.external_account_required,
+            "meta": self.meta,
+        }
 
     def get_private_key(self, format="pem"):
         if format == "pem":
@@ -180,21 +200,12 @@ class ACMEClient:
         else:
             raise ValueError(f"Unknown private key format: {format}")
 
-    def show_account(self):
-        try:
-            account_url, account_data = self._get_account_url()
-            print(f"Account URI: {account_url}")
-            print("Account Data:")
-            print(json.dumps(account_data, indent=2))
-        except Exception as e:
-            print(e)
+    def get_public_key(self, format="pem"):
+        raise NotADirectoryError
 
     def update_contact(self, contacts):
-        try:
-            account_url, _ = self._get_account_url()
-        except Exception as e:
-            print(e)
-            return
+        account_url, _ = self.get_account()
+
         if len(contacts) == 1 and contacts[0].lower() == "clear":
             payload_contacts = []
         else:
@@ -246,42 +257,20 @@ class ACMEClient:
         if not self.directory:
             self._get_directory()
 
-        # Already created?
         try:
-            account_url, account_data = self._get_account_url()
-            print(f"Account already created: {account_url}")
-            print(json.dumps(account_data, indent=2))
-            return
-        except AccountNotFound:
+            account_url, _ = self.get_account()
+            raise ACMEError(f"Account already created: {account_url}")
+        except accountDoesNotExist:
             pass
-        except Exception as e:
-            print(e)
-            return
-
-        # Check Terms of Service
-        if self.terms_of_service_url:
-            if not agree_tos:
-                print(f"Terms of Service exist: {self.terms_of_service_url}")
-                user_input = input("Do you agree to the Terms of Service? (y/N): ")
-                if user_input.lower() != 'y':
-                    print("You must agree to the Terms of Service to create an account.")
-                    sys.exit(1)
-                terms_agreed = True
-            else:
-                terms_agreed = True
-        else:
-            terms_agreed = None
 
         # Check EAB Requirements
         if self.external_account_required and not (eab_kid and eab_hmac_key):
-            print("Error: This ACME server requires External Account Binding (EAB).")
-            print("Please provide --eab-kid and --eab-hmac-key")
-            sys.exit(1)
+            raise ACMEError("This ACMEv2 server required External Account Binding.")
 
         payload = {}
         if contacts:
             payload["contact"] = contacts
-        if terms_agreed:
+        if agree_tos:
             payload["termsOfServiceAgreed"] = True
 
         # Handle EAB
@@ -310,28 +299,9 @@ class ACMEClient:
             print(f"Account creation failed. {error}: {error_msg}")
 
     def deactivate_account(self, confirm=False):
-        """
-        RFC 8555 7.3.6. Account Deactivation
-        """
-        try:
-            account_url, _ = self._get_account_url()
-        except AccountNotFound:
-            print("Error: Account does not exist, cannot deactivate.")
-            return
-        except Exception as e:
-            print(f"Error locating account: {e}")
-            return
+        account_url, _ = self.get_account()
         if not confirm:
-            print("!!! WARNING !!!")
-            print("You are about to deactivate your ACME account.")
-            print("Once deactivated, you will NOT be able to use this private key")
-            print("on this ACME server ever again. This action is irreversible.")
-            user_input = input("Are you sure you want to proceed? (y/N): ")
-            if user_input.lower() == "y":
-                self.logger.info(f"User confirmed account deactivation {account_url}")
-            else:
-                print("Deactivation aborted by user.")
-                sys.exit(0)
+            raise cliMustAccept("Deactivation requires confirmation from the user.")
         payload = {"status": "deactivated"}
         self.logger.info(f"Deactivating account {account_url}")
         resp = self._request("POST", account_url, payload, kid=account_url)
@@ -342,10 +312,130 @@ class ACMEClient:
             error, error_msg = self._get_error(resp)
             print(f"Deactivation failed. {error}: {error_msg}")
 
+def cli_account_show(client: ACMEClient, args):
+    try:
+        account_uri, account_data = client.get_account()
+        print(f"Account URI: {account_uri}")
+        print(f"Account status: {account_data.get('status')}")
+        print("Account data:")
+        print(json.dumps(account_data, indent=2))
+    except Exception as ex:
+        print(ex)
 
-if __name__ == "__main__":
+def cli_account_update(client: ACMEClient, args):
+    try:
+        client.update_contact(args.contacts)
+    except accountDoesNotExist as ex:
+        print(ex)
+        sys.exit(1)
+
+def cli_account_create(client: ACMEClient, args):
+    try:
+        account_uri, _ = client.get_account()
+        print(f"Account already exist: {account_uri}")
+        sys.exit(0)
+    except accountDoesNotExist:
+        pass
+    acme = client.get_metadata()
+    if acme.get('terms_of_service_url') and not args.agree_tos:
+        print(f"Terms of Service exist: {client.terms_of_service_url}")
+        user_input = input("Do you agree to the Terms of Service? (y/N): ")
+        if user_input.lower() != 'y':
+            print("You must agree to the Terms of Service to create an account.")
+            sys.exit(1)
+        args.agree_tos = True
+    try:
+        client.create_account(
+            contacts=args.contacts,
+            eab_kid=args.eab_kid,
+            eab_hmac_key=args.eab_hmac_key,
+            eab_alg=args.eab_alg,
+            agree_tos=args.agree_tos
+        )
+    except externalAccountRequired as ex:
+        print(f"Unable to create account, {acme.get('url')} requires External Account Binding:")
+        print(ex)
+        sys.exit(1)
+
+def cli_account_deactivate(client: ACMEClient, args):
+    try:
+        account_uri, _ = client.get_account()
+    except accountDoesNotExist:
+        print("Can't deactivate: account does not exist.")
+        sys.exit(0)
+    if not args.confirm:
+        print("!!! WARNING !!!")
+        print(f"You are about to deactivate your ACME account: {account_uri}")
+        print("Once deactivated, you will NOT be able to use this private key")
+        print("on this ACME server ever again as it will be tied to this account.")
+        print("This account status will change to 'deactivated' permanently.")
+        print("WARNING: This action is irreversible.")
+        print(f"WARNING: You will lose {account_uri} forever.")
+        user_input = input("Are you sure you want to proceed? (y/N): ")
+        if user_input.lower() != "y":
+            print("Deactivation aborted by user.")
+            sys.exit(0)
+        args.confirm = True
+    client.deactivate_account(confirm=args.confirm)
+
+def cli_key_thumbprint(client: ACMEClient, args):
+    thumbprint = client.thumbprint()
+    message = """Your public thumbprint: {0}
+
+Your thumbprint is calculated from the public portion of your private asymetric key.
+Thumbprint is not a secret and revealing it does not compromise your ACME account.
+You can use it to setup a stateless http-01 challenge, as per RFC8555 Section 8.3
+the token from the challenge is part of the URL accessed. Therefore, challenge can be
+pre-computed entirely by your HTTP server without uploading any files to pass
+the challenge.
+
+When to use:
+* if you want to run acme client on a different machine than serving your http traffic,
+* when you have traffic distributed over multiple machines and uploading a challenge
+  file to all of them would be error-prone and unreliable,
+* perfect if you have LoadBalancer in front of multiple web servers that auto-scale
+* perfect for Openshift /  Kubernetes, where you don't have to modify
+  Ingress/HTTPRoute/Route object to pass the challenge,
+* perfect if you operate a small geo-distributed CDN with lots of web servers
+  and you need to be sure all of them always pass the challenge.
+
+Risk:
+When implemented incorrectly, you are risking cross-site vulnerability. Examples
+provided bellow do not allow cross-site HTML tags being passed using a regexp.
+
+How to set this up:
+nginx:
+    http {{
+    ...
+        server {{
+        listen 80;
+        ...
+            location ~ ^/\.well-known/acme-challenge/([-_a-zA-Z0-9]+)$ {{
+            default_type text/plain;
+            return 200 "$1.{0}";
+            }}
+        ...
+        }}
+    }}
+
+apache2:
+    <VirtualHost *:80>
+        ...
+        <LocationMatch "/.well-known/acme-challenge/(?<challenge>[-_a-zA-Z0-9]+)">
+            RewriteEngine On
+            RewriteRule "^([-_a-zA-Z0-9]+)$" "$1" [E=challenge:$1]
+            ErrorDocument 200 "%{{ENV:MATCH_CHALLENGE}}.{0}"
+            RewriteRule ^ - [L,R=200]
+        </LocationMatch>
+        ...
+    </VirtualHost>
+""".format(thumbprint)
+    print(message)
+
+
+def cli():
     parser = argparse.ArgumentParser(
-        prog="acme-v2.py",
+        prog="acmecli.py",
         description="ACME client helper."
     )
     parser.add_argument("-v", "--verbose", action='store_true', default=False)
@@ -355,7 +445,7 @@ if __name__ == "__main__":
     # Account Parser
     account_parser = subparsers.add_parser("account", help="Account operations")
     account_subparsers = account_parser.add_subparsers(dest="account_action", required=True)
-    
+
     account_subparsers.add_parser("show", help="Show account details")
 
     update_parser = account_subparsers.add_parser("update", help="Update account contacts")
@@ -368,7 +458,7 @@ if __name__ == "__main__":
     create_parser.add_argument("--eab-alg", choices=["HS256", "HS384", "HS512"], default="HS256", help="Algorithm for EAB (default: HS256)")
     group = create_parser.add_mutually_exclusive_group()
     group.add_argument("--agree-tos", action="store_true", help="Agree to Terms of Service automatically")
-    
+
     deactivate_parser = account_subparsers.add_parser("deactivate", help="Deactivate account")
     deactivate_parser.add_argument("--confirm", action="store_true", help="Confirm deactivation without prompts")
     # Key Parse
@@ -402,21 +492,19 @@ if __name__ == "__main__":
 
     if args.main_action == "account":
         if args.account_action == "show":
-            client.show_account()
+            cli_account_show(client, args)
         elif args.account_action == "update":
+            cli_account_update(client, args)
             client.update_contact(args.contacts)
         elif args.account_action == "create":
-            client.create_account(
-                contacts=args.contacts,
-                eab_kid=args.eab_kid,
-                eab_hmac_key=args.eab_hmac_key,
-                eab_alg=args.eab_alg,
-                agree_tos=args.agree_tos
-            )
+            cli_account_create(client, args)
         elif args.account_action == "deactivate":
-            client.deactivate_account(confirm=args.confirm)
+            cli_account_deactivate(client, args)
     elif args.main_action == "key":
         if args.key_action == "thumbprint":
-            print(client.thumbprint())
+            cli_key_thumbprint(client, args)
         elif args.key_action == "convert":
             print(client.get_private_key(args.format))
+
+if __name__ == "__main__":
+    cli()
