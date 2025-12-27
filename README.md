@@ -237,3 +237,25 @@ certificates for the same domain or subdomain.
     Note: No ACMEv2 CA rolled out this challenge yet. It is planned for 2026.
     Also, no acme client supports this challenge (yet).
 
+# Contributing
+
+By submitting a contribution to be included in this project, you implicitly agree to licence your contribution under BSD 3-Clause Licence.
+
+# TODO
+
+* Investigate `NIST P-512` with `letsencrypt.org` and `pki.goog` as they seem
+  not working
+
+* design `certificate create` and `certificate revoke` commands, must write
+  files to disk must generate private key for tls-server (if none prepared
+  upfront), etc.
+
+* must support ACMEv2 extension profiles
+
+* must support ACMEv2 extension ACME Renewal Information
+
+* challenge - initially copy uacme external program approach, so user can handle
+  all possible challenges himself in order that ACMEv2 presents them.
+
+* challenge - later focus on `http-01` (stateless) and `dns-persist-01`
+
