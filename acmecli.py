@@ -316,9 +316,10 @@ def cli_account_show(client: ACMEClient, args):
     try:
         account_uri, account_data = client.get_account()
         print(f"Account URI: {account_uri}")
-        print(f"Account status: {account_data.get('status')}")
-        print("Account data:")
-        print(json.dumps(account_data, indent=2))
+        if args.details:
+            print(f"Account status: {account_data.get('status')}")
+            print("Account data:")
+            print(json.dumps(account_data, indent=2))
     except Exception as ex:
         print(ex)
 
@@ -380,14 +381,13 @@ def cli_account_deactivate(client: ACMEClient, args):
 
 def cli_key_thumbprint(client: ACMEClient, args):
     thumbprint = client.thumbprint()
-    message = """Your public thumbprint: {0}
-
+    print(f"Your public thumbprint: {thumbprint}")
+    message = """
 Your thumbprint is calculated from the public portion of your private asymetric key.
 Thumbprint is not a secret and revealing it does not compromise your ACME account.
 You can use it to setup a stateless http-01 challenge, as per RFC8555 Section 8.3
 the token from the challenge is part of the URL accessed. Therefore, challenge can be
-pre-computed entirely by your HTTP server without uploading any files to pass
-the challenge.
+pre-computed entirely for your private key and pass any challenge automatically.
 
 When to use:
 * if you want to run acme client on a different machine than serving your http traffic,
@@ -401,7 +401,7 @@ When to use:
 
 Risk:
 When implemented incorrectly, you are risking cross-site vulnerability. Examples
-provided bellow do not allow cross-site HTML tags being passed using a regexp.
+provided bellow do not allow cross-site HTML tags by enforcing a strict regexp.
 
 How to set this up:
 nginx:
@@ -430,7 +430,8 @@ apache2:
         ...
     </VirtualHost>
 """.format(thumbprint)
-    print(message)
+    if args.details:
+        print(message)
 
 
 def cli():
@@ -445,12 +446,10 @@ def cli():
     # Account Parser
     account_parser = subparsers.add_parser("account", help="Account operations")
     account_subparsers = account_parser.add_subparsers(dest="account_action", required=True)
-
-    account_subparsers.add_parser("show", help="Show account details")
-
+    show_parser = account_subparsers.add_parser("show", help="Show account details")
+    show_parser.add_argument("-d", "--details", action='store_true')
     update_parser = account_subparsers.add_parser("update", help="Update account contacts")
     update_parser.add_argument("contacts", nargs="+", help="List of contacts (e.g., mailto:x@y.z) or 'clear'")
-
     create_parser = account_subparsers.add_parser("create", help="Create new account")
     create_parser.add_argument("contacts", nargs="*", help="List of contacts (e.g., mailto:x@y.z)", default=[])
     create_parser.add_argument("--eab-kid", help="Key Identifier for External Account Binding")
@@ -458,13 +457,13 @@ def cli():
     create_parser.add_argument("--eab-alg", choices=["HS256", "HS384", "HS512"], default="HS256", help="Algorithm for EAB (default: HS256)")
     group = create_parser.add_mutually_exclusive_group()
     group.add_argument("--agree-tos", action="store_true", help="Agree to Terms of Service automatically")
-
     deactivate_parser = account_subparsers.add_parser("deactivate", help="Deactivate account")
     deactivate_parser.add_argument("--confirm", action="store_true", help="Confirm deactivation without prompts")
     # Key Parse
     key_parser = subparsers.add_parser("key", help="Key operations")
     key_subparsers = key_parser.add_subparsers(dest="key_action", required=True)
-    key_subparsers.add_parser("thumbprint", help="Print key thumbprint")
+    thumbprint_parser = key_subparsers.add_parser("thumbprint", help="Print key thumbprint")
+    thumbprint_parser.add_argument("-d", "--details", action='store_true')
     convert_parser = key_subparsers.add_parser("convert", help="Convert key format")
     convert_parser.add_argument("format", choices=["pem", "json"], help="Output format")
     args = parser.parse_args()
