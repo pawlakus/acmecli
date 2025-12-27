@@ -131,7 +131,11 @@ To migrate a PEM key to Certbot, convert it to JSON:
 acmecli.py -k private.pem key convert json > private_key.json
 ```
 
-*Note: Certbot expects this file at `/etc/letsencrypt/accounts/<server address>/<directory hash>/<account id>/private_key.json`. You may also need to manually construct the accompanying `meta.json` and `regr.json` metadata files required by Certbot. TODO: provide detailed instruction, on how to import privatekey into certbot reliably*
+*Note: Certbot expects this file at `/etc/letsencrypt/accounts/<server
+address>/<directory hash>/<account id>/private_key.json`. You may also need to
+manually construct the accompanying `meta.json` and `regr.json` metadata files
+required by Certbot. TODO: provide detailed instruction, on how to import
+privatekey into certbot reliably*
 
 ### Converting for Lego or uacme
 To migrate a Certbot JWK key to a client that supports PEM:
@@ -169,12 +173,8 @@ where the *thumbprint* is derived from the **public** part of your account key
 and never changes, and *token* is part of the **GET** URI request send by ACMEv2
 to your web server(s).
 
-Your thumbprint is calculated from the public portion of your private asymetric
-key. Thumbprint is not a secret and revealing it does not compromise your ACME
-account. You can use it to setup a stateless http‑01 challenge, as per RFC8555
-Section 8.3 the token from the challenge is part of the URL accessed. Therefore,
-challenge can be pre‑computed entirely for your private key and pass any
-challenge automatically.
+**Thumbprint** is not a secret and revealing it to the whole World does not
+compromise your ACME account.
 
 When to use:
 
@@ -244,6 +244,24 @@ frontend web
     bind :80
     http-request return status 200 content-type text/plain lf-string "%[path,field(-1,/)].${ACCOUNT_THUMBPRINT}\n" if { path_reg '^/.well-known/acme-challenge/[-_a-zA-Z0-9]+$' }
 ```
+
+### Manually tst the challenge
+
+If you see the following output on your web server *example.com*, your are
+readyto pass `http-01` challenge stetelessly with your acme account.
+
+
+```
+curl -s http://example.com/.well-known/acme-challenge/acme-secret-challenge-token
+
+acme-secret-challenge-token.wppuytlzEm_i-rXLor8aqtTHJYZtk-J6qoh1WkIaEPA
+```
+
+It does not matter what value your put under `acme-secret-challenge-token`,
+you have to get it back on the fly in the format `<token>.<key-thumbprint>`.
+ACMEv2 server will issue a request to this *FQDN* and obtains a correct answer
+for itself, generated on the fly by your web server.
+
 
 ## Stateless dns-persist-01
 
