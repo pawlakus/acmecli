@@ -253,7 +253,7 @@ class ACMEClient:
         return resp.headers.get('Location'), resp.json()
 
     def thumbprint(self):
-        return self.key.thumbprint()
+        return self.key.get_thumbprint()
 
     def get_private_key(self, format="pem"):
         if format == "pem":
