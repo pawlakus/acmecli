@@ -61,19 +61,19 @@ https://acme-v02.api.letsencrypt.org/directory
 
 ## ACMEv2 Account Basics
 
-1. **Key generation** – The user creates an asymmetric private key (RSA, EC).
+1. **Key generation** - The user creates an asymmetric private key (RSA, EC).
 
-2. **Key parts** – The key contains a **private** component (kept secret) and a
+2. **Key parts** - The key contains a **private** component (kept secret) and a
    **public** component (derived from the private part).
 
 3. **Secrets** - Your **private** key component is used to sign all communication,
    but is never revealed to anybody, including ACMEv2 server. You only pass the
    **public** component. Nobody except you knows your private key.
 
-3. **Account URI** – When you create new ACMEv2 account, the ACME server assigns
+3. **Account URI** - When you create new ACMEv2 account, the ACME server assigns
    an *account URI* that is permanently bound to the *public* part of your key.
 
-4. **Thumbprint** – A hash of the public key (per RFC 8555 § 8.3). It is **not
+4. **Thumbprint** - A hash of the public key (per RFC 8555 § 8.3). It is **not
    secret**; anyone may know it without compromising the account. It is retrived
    from a **public** component of your asymmetric key.
 
