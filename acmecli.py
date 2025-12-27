@@ -31,56 +31,92 @@ class accountDoesNotExist(ACMEError):
     pass
 
 
+class JOSESigner:
+    def __init__(self, key_path=None, key_content=None, kid=None):
+        self.jwk = None
+        self.alg = None
+        
+        # Load Content
+        if key_path:
+            with open(key_path, "rb") as f:
+                content = f.read()
+            if key_path.endswith(('.json', '.js')):
+                self._load_json(content)
+            else:
+                self._load_auto(content)
+        elif key_content:
+            # Check if it is an HMAC bytes key (Octet) or standard key
+            if isinstance(key_content, bytes) and kid:
+                # EAB HMAC case
+                self.jwk = jwk.OctKey.import_key(key_content, parameters={'kid': kid})
+            else:
+                self._load_auto(key_content)
+        
+        if not self.jwk:
+            raise ValueError("Unable to load key")
+
+        # Determine Algorithm
+        self._set_algorithm()
+
+    def _load_json(self, content):
+        self.jwk = jwk.import_key(json.loads(content))
+
+    def _load_auto(self, content):
+        for keytype in ["RSA", "EC", "OKP"]:
+            try:
+                self.jwk = jwk.import_key(content, keytype)
+                return
+            except errors.InvalidKeyTypeError:
+                continue
+
+    def _set_algorithm(self):
+        # Mapping per RFC 7518
+        ec_algs = {
+            "P-256": "ES256", "P-384": "ES384", 
+            "P-521": "ES512", "Ed25519": "Ed25519"
+        }
+        if self.jwk.key_type == "RSA":
+            self.alg = "RS256"
+        elif self.jwk.key_type in ["EC", "OKP"]:
+            self.alg = ec_algs.get(self.jwk.curve_name)
+        elif self.jwk.key_type == "oct":
+            self.alg = "HS256" 
+        if not self.alg:
+            raise ValueError("Unsupported private key type.")
+
+    def sign(self, protected_header, payload_str_or_bytes):
+        if "alg" not in protected_header:
+            protected_header["alg"] = self.alg
+            
+        registry = jws.JWSRegistry(algorithms=[protected_header["alg"]], strict_check_header=False)
+        member = {"protected": protected_header}
+        return jws.serialize_json(member, payload=payload_str_or_bytes, private_key=self.jwk, registry=registry)
+
+    def get_public_jwk(self):
+        return self.jwk.as_dict(private=False)
+
+    def get_thumbprint(self):
+        return self.jwk.thumbprint()
+
+    def as_pem(self):
+        return self.jwk.as_pem().decode("ascii")
+
+    def as_json(self):
+        return json.dumps(self.jwk.as_dict(), indent=2)
+
+
 class ACMEClient:
     def __init__(self, key_path, directory_url="https://acme-v02.api.letsencrypt.org/directory"):
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self.directory_url = directory_url
         self.key_path = key_path
-        self.jwk = None
-        self.jwk_alg = None
-        self._load_key()
+        self.key = self.key = JOSESigner(key_path=key_path)
         self.session = requests.Session()
         self.nonce = None
         self.directory = None
         self.meta = {}
         self.external_account_required = False
         self.terms_of_service_url = None
-
-    def _load_key(self):
-        self.logger.debug(f"Loading private key {self.key_path}")
-        with open(self.key_path, "rb") as f:
-            file_content = f.read()
-        if self.key_path.endswith(('.json', '.js')):
-            self.logger.debug(f"Initializing JWK from JSON")
-            self.jwk = jwk.import_key(json.loads(file_content))
-        else:
-            for keytype in ["RSA", "EC", "OKP"]:
-                try:
-                    self.logger.debug(f"Initializing JWK of type {keytype}")
-                    self.jwk = jwk.import_key(file_content, keytype)
-                    break
-                except errors.InvalidKeyTypeError:
-                    pass
-            if not self.jwk:
-                raise Exception(f"Unable to load {self.key_path}")
-        # set self.jwk_alg
-        supported_ec_algorithms = {
-            "P-256": "ES256",
-            "P-384": "ES384",
-            "P-521": "ES512",
-            "Ed25519": "Ed25519"
-        }
-        try:
-            if self.jwk.key_type == "RSA":
-                self.jwk_alg = "RS256"
-            elif self.jwk.key_type in ["EC", "OKP"]:
-                crv = self.jwk.curve_name
-                self.jwk_alg = supported_ec_algorithms[crv]
-            else:
-                raise("Unsupported private key type.")
-        except KeyError:
-            raise("Unsupported private key type.")
-        self.logger.debug(f"JWK initialized: {self.jwk.key_type}")
 
     def _get_directory(self):
         self.logger.debug("Obtaining directory json.")
@@ -104,18 +140,43 @@ class ACMEClient:
 
     def _sign(self, payload_str_or_bytes, url, kid=None):
         protected = {
-            "alg": self.jwk_alg,
+            "alg": self.key.alg,
             "nonce": self._get_nonce(),
             "url": url
-        }
+        }        
         if kid:
             protected["kid"] = kid
         else:
-            protected["jwk"] = self.jwk.as_dict(private=False)
-        registry = jws.JWSRegistry(algorithms=[self.jwk_alg], strict_check_header=False)
-        member = {"protected": protected}
-        signed = jws.serialize_json(member, payload=payload_str_or_bytes, private_key=self.jwk, registry=registry)
-        return signed
+            protected["jwk"] = self.key.get_public_jwk()
+        return self.key.sign(protected, payload_str_or_bytes)
+
+    def _sign_eab(self, eab_kid, eab_hmac_key, eab_alg, url):
+        """
+        RFC 8555 7.3.4 External Account Binding
+        Returns the standard JWS binding object.
+        """
+        # Add padding if necessary
+        pad = len(eab_hmac_key) % 4
+        if pad > 0:
+            eab_hmac_key += '=' * (4 - pad)
+
+        try:
+            key_bytes = base64.urlsafe_b64decode(eab_hmac_key)
+        except Exception:
+            raise ValueError("EAB HMAC key must be base64url encoded.")
+
+        try:
+            hmac_key = JOSESigner(key_content=key_bytes, kid=eab_kid)
+        except Exception as e:
+            raise ValueError(f"Failed to import HMAC key: {e}")
+
+        payload = json.dumps(self.key.get_public_jwk(), separators=(',', ':'))
+        protected = {
+            "alg": eab_alg,
+            "kid": eab_kid,
+            "url": url
+        }
+        return hmac_key.sign(protected, payload)
 
     def _request(self, method, url, payload, kid=None, allow_redirects=True):
         if not self.directory:
@@ -123,6 +184,8 @@ class ACMEClient:
         if isinstance(payload, dict):
             payload = json.dumps(payload, separators=(',', ':'))
         signed_data = self._sign(payload, url, kid)
+        self.logger.debug(json.dumps(signed_data, indent=2))
+        #raise ACMEError("debug pause")
         headers = {"Content-Type": "application/jose+json"}
         resp = self.session.request(method, url, json=signed_data, headers=headers, allow_redirects=allow_redirects)
         self.nonce = resp.headers.get('Replay-Nonce')
@@ -165,6 +228,16 @@ class ACMEClient:
         else:
             return None, ""
 
+    def get_metadata(self):
+        if not self.directory:
+            self._get_directory()
+        return {
+            "url": self.directory_url,
+            "terms_of_service_url": self.terms_of_service_url,
+            "external_account_required": self.external_account_required,
+            "meta": self.meta,
+        }
+
     def get_account(self):
         if not self.directory:
             self._get_directory()
@@ -180,28 +253,15 @@ class ACMEClient:
         return resp.headers.get('Location'), resp.json()
 
     def thumbprint(self):
-        return self.jwk.thumbprint()
-
-    def get_metadata(self):
-        if not self.directory:
-            self._get_directory()
-        return {
-            "url": self.directory_url,
-            "terms_of_service_url": self.terms_of_service_url,
-            "external_account_required": self.external_account_required,
-            "meta": self.meta,
-        }
+        return self.key.thumbprint()
 
     def get_private_key(self, format="pem"):
         if format == "pem":
-            return self.jwk.as_pem().decode("ascii")
+            return self.key.as_pem().decode("ascii")
         elif format == "json":
-            return json.dumps(self.jwk.as_dict(), indent=2)
+            return json.dumps(self.key.as_dict(), indent=2)
         else:
             raise ValueError(f"Unknown private key format: {format}")
-
-    def get_public_key(self, format="pem"):
-        raise NotADirectoryError
 
     def update_contact(self, contacts):
         account_url, _ = self.get_account()
@@ -220,38 +280,6 @@ class ACMEClient:
         else:
             print("Account updated successfully.")
             print(json.dumps(resp.json(), indent=2))
-
-    def _sign_eab(self, eab_kid, eab_hmac_key, eab_alg, url):
-        """
-        RFC 8555 7.3.4 External Account Binding
-        Returns the standard JWS binding object.
-        """
-        # Add padding if necessary
-        pad = len(eab_hmac_key) % 4
-        if pad > 0:
-            eab_hmac_key += '=' * (4 - pad)
-
-        try:
-            key_bytes = base64.urlsafe_b64decode(eab_hmac_key)
-        except Exception:
-            raise ValueError("EAB HMAC key must be base64url encoded.")
-
-        try:
-            mac_jwk = jwk.OctKey.import_key(key_bytes, parameters={'kid': eab_kid})
-            self.logger.debug(f"OctKey: {json.dumps(mac_jwk.as_dict(), indent=2)}")
-        except Exception as e:
-            raise ValueError(f"Failed to import HMAC key: {e}")
-
-        payload = json.dumps(self.jwk.as_dict(private=False), separators=(',', ':'))
-        protected = {
-            "alg": eab_alg,
-            "kid": eab_kid,
-            "url": url
-        }
-        registry = jws.JWSRegistry(algorithms=[eab_alg], strict_check_header=False)
-        member = {"protected": protected}
-        signed = jws.serialize_json(member, payload=payload, private_key=mac_jwk, registry=registry)
-        return signed
 
     def create_account(self, contacts, eab_kid=None, eab_hmac_key=None, eab_alg="HS256", agree_tos=False):
         if not self.directory:
@@ -297,6 +325,45 @@ class ACMEClient:
         else:
             error, error_msg = self._get_error(resp)
             print(f"Account creation failed. {error}: {error_msg}")
+
+    def change_account_key(self, new_key_path):
+        """
+        RFC 8555 7.3.5: Account Key Rollover
+        """
+        if not self.directory:
+            self._get_directory()
+        key_change_url = self.directory.get('keyChange')
+        if not key_change_url:
+            raise ACMEError("Server does not support keyChange.")
+        try:
+            new_key_signer = JOSESigner(key_path=new_key_path)
+        except Exception as e:
+            raise ValueError(f"Failed to load new key from {new_key_path}: {e}")
+
+        account_url, _ = self.get_account()
+
+        self.logger.debug("Account rekeying. Creating inner payload.")
+        inner_payload = {
+            "account": account_url,
+            "oldKey": self.key.get_public_jwk()
+        }
+        inner_payload_json = json.dumps(inner_payload, separators=(',', ':'))
+        inner_protected_header = {
+            "alg": new_key_signer.alg,
+            "jwk": new_key_signer.get_public_jwk(),
+            "url": key_change_url
+        }
+        inner_jws = new_key_signer.sign(inner_protected_header, inner_payload_json)
+        self.logger.debug(f"inner_jws: {json.dumps(inner_jws)}")
+
+        self.logger.debug(f"Sending rekey request to {key_change_url}")        
+        resp = self._request("POST", key_change_url, inner_jws, kid=account_url)
+        if resp.status_code == 200:
+            print("Key rollover successful.")
+            print(json.dumps(resp.json(), indent=2))
+        else:
+            error, error_msg = self._get_error(resp)
+            raise ACMEError(f"Key rollover failed. {error}: {error_msg}")
 
     def deactivate_account(self, confirm=False):
         account_url, _ = self.get_account()
@@ -355,6 +422,24 @@ def cli_account_create(client: ACMEClient, args):
         )
     except externalAccountRequired as ex:
         print(f"Unable to create account, {acme.get('url')} requires External Account Binding:")
+        print(ex)
+        sys.exit(1)
+
+def cli_account_rekey(client: ACMEClient, args):
+    if not os.path.exists(args.new_key):
+        print(f"Error: New key file not found at {args.new_key}")
+        sys.exit(1)
+    try:
+        account_uri, _ = client.get_account()
+    except accountDoesNotExist:
+        print(f"Unable to rekey: no account exist with the provided key {client.key_path}")
+        sys.exit(1)
+    print(f"Rolling over new key for account {account_uri}")
+    print(f"Old Key: {client.key_path}")
+    print(f"New Key: {args.new_key}")    
+    try:
+        client.change_account_key(args.new_key)
+    except ACMEError as ex:
         print(ex)
         sys.exit(1)
 
@@ -433,7 +518,6 @@ apache2:
     if args.details:
         print(message)
 
-
 def cli():
     parser = argparse.ArgumentParser(
         prog="acmecli.py",
@@ -457,6 +541,8 @@ def cli():
     create_parser.add_argument("--eab-alg", choices=["HS256", "HS384", "HS512"], default="HS256", help="Algorithm for EAB (default: HS256)")
     group = create_parser.add_mutually_exclusive_group()
     group.add_argument("--agree-tos", action="store_true", help="Agree to Terms of Service automatically")
+    rekey_parser = account_subparsers.add_parser("rekey", help="Change account keys (Rollover)")
+    rekey_parser.add_argument("new_key", type=str, help="Path to the NEW private key file")
     deactivate_parser = account_subparsers.add_parser("deactivate", help="Deactivate account")
     deactivate_parser.add_argument("--confirm", action="store_true", help="Confirm deactivation without prompts")
     # Key Parse
@@ -487,23 +573,30 @@ def cli():
         print(f"Error: Private key not found at {args.key}")
         sys.exit(1)
 
-    client = ACMEClient(args.key, directory_url=acme_url)
 
-    if args.main_action == "account":
-        if args.account_action == "show":
-            cli_account_show(client, args)
-        elif args.account_action == "update":
-            cli_account_update(client, args)
-            client.update_contact(args.contacts)
-        elif args.account_action == "create":
-            cli_account_create(client, args)
-        elif args.account_action == "deactivate":
-            cli_account_deactivate(client, args)
-    elif args.main_action == "key":
-        if args.key_action == "thumbprint":
-            cli_key_thumbprint(client, args)
-        elif args.key_action == "convert":
-            print(client.get_private_key(args.format))
+    try:
+        client = ACMEClient(args.key, directory_url=acme_url)
+
+        if args.main_action == "account":
+            if args.account_action == "show":
+                cli_account_show(client, args)
+            elif args.account_action == "update":
+                cli_account_update(client, args)
+                client.update_contact(args.contacts)
+            elif args.account_action == "create":
+                cli_account_create(client, args)
+            elif args.account_action == "rekey":
+                cli_account_rekey(client, args)
+            elif args.account_action == "deactivate":
+                cli_account_deactivate(client, args)
+        elif args.main_action == "key":
+            if args.key_action == "thumbprint":
+                cli_key_thumbprint(client, args)
+            elif args.key_action == "convert":
+                print(client.get_private_key(args.format))
+    except ACMEError as ex:
+        print(ex)
+        sys.exit(1)
 
 if __name__ == "__main__":
     cli()

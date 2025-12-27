@@ -26,7 +26,7 @@ project, API is not frozed and may be changed without notice.
 ```
 Usage:
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account show
+acmecli.py [-a ACME_URL] -k key.(pem|json) account show [-d|-detail]
     Shows your account URI and other details reported by ACMEv2 server.
 
 acmecli.py [-a ACME_URL] -k key.(pem|json) account create --help
@@ -40,8 +40,8 @@ acmecli.py [-a ACME_URL] -k key.(pem|json) account update \
     Per RFC 8555, contacts are OPTIONAL, but pki.goog requires at
     least one contact.
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account rekey /path/to/new/key.(pem|json)
-    Your ACMEv2 account_uri allows you to re-key it with another private key.
+acmecli.py [-a ACME_URL] -k key.(pem|json) account rekey new.(pem|json)
+    Your ACMEv2 account may allows you to re-key it with another private key.
     WARNING: This will change your thumbprint but keep your current account_uri.
 
 acmecli.py [-a ACME_URL] -k key.(pem|json) account deactivate
@@ -85,7 +85,7 @@ openssl ecparam -name secp384r1 -noout -genkey -out p384.pem
 openssl ecparam -name secp521r1 -noout -genkey -out p521.pem
 
 # Ed25519
-openssl genpkey -algorithm ed25519 -o ed25519.pem
+openssl genpkey -algorithm ed25519 -out ed25519.pem
 ```
 
 Beware that most ACMEv2 servers only support `RSA` and `P-256`.
