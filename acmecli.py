@@ -35,8 +35,6 @@ class JOSESigner:
     def __init__(self, key_path=None, key_content=None, kid=None):
         self.jwk = None
         self.alg = None
-        
-        # Load Content
         if key_path:
             with open(key_path, "rb") as f:
                 content = f.read()
@@ -45,17 +43,13 @@ class JOSESigner:
             else:
                 self._load_auto(content)
         elif key_content:
-            # Check if it is an HMAC bytes key (Octet) or standard key
             if isinstance(key_content, bytes) and kid:
-                # EAB HMAC case
                 self.jwk = jwk.OctKey.import_key(key_content, parameters={'kid': kid})
             else:
                 self._load_auto(key_content)
-        
         if not self.jwk:
             raise ValueError("Unable to load key")
-
-        # Determine Algorithm
+        # Only used if caller does not set it himself when calling self.sign()
         self._set_algorithm()
 
     def _load_json(self, content):
@@ -72,22 +66,25 @@ class JOSESigner:
     def _set_algorithm(self):
         # Mapping per RFC 7518
         ec_algs = {
-            "P-256": "ES256", "P-384": "ES384", 
+            "P-256": "ES256", "P-384": "ES384",
             "P-521": "ES512", "Ed25519": "Ed25519"
         }
         if self.jwk.key_type == "RSA":
             self.alg = "RS256"
         elif self.jwk.key_type in ["EC", "OKP"]:
-            self.alg = ec_algs.get(self.jwk.curve_name)
+            try:
+                self.alg = ec_algs.get(self.jwk.curve_name)
+            except KeyError:
+                raise ACMEError(f"Unsupported curve type: {self.jwk.curve_name}")
         elif self.jwk.key_type == "oct":
-            self.alg = "HS256" 
+            self.alg = "HS256"
         if not self.alg:
-            raise ValueError("Unsupported private key type.")
+            raise ACMEError("Unsupported private key type.")
 
     def sign(self, protected_header, payload_str_or_bytes):
         if "alg" not in protected_header:
             protected_header["alg"] = self.alg
-            
+
         registry = jws.JWSRegistry(algorithms=[protected_header["alg"]], strict_check_header=False)
         member = {"protected": protected_header}
         return jws.serialize_json(member, payload=payload_str_or_bytes, private_key=self.jwk, registry=registry)
@@ -143,7 +140,7 @@ class ACMEClient:
             "alg": self.key.alg,
             "nonce": self._get_nonce(),
             "url": url
-        }        
+        }
         if kid:
             protected["kid"] = kid
         else:
@@ -167,6 +164,7 @@ class ACMEClient:
 
         try:
             hmac_key = JOSESigner(key_content=key_bytes, kid=eab_kid)
+            hmac_key.alg = eab_alg
         except Exception as e:
             raise ValueError(f"Failed to import HMAC key: {e}")
 
@@ -356,7 +354,7 @@ class ACMEClient:
         inner_jws = new_key_signer.sign(inner_protected_header, inner_payload_json)
         self.logger.debug(f"inner_jws: {json.dumps(inner_jws)}")
 
-        self.logger.debug(f"Sending rekey request to {key_change_url}")        
+        self.logger.debug(f"Sending rekey request to {key_change_url}")
         resp = self._request("POST", key_change_url, inner_jws, kid=account_url)
         if resp.status_code == 200:
             print("Key rollover successful.")
@@ -436,7 +434,7 @@ def cli_account_rekey(client: ACMEClient, args):
         sys.exit(1)
     print(f"Rolling over new key for account {account_uri}")
     print(f"Old Key: {client.key_path}")
-    print(f"New Key: {args.new_key}")    
+    print(f"New Key: {args.new_key}")
     try:
         client.change_account_key(args.new_key)
     except ACMEError as ex:
