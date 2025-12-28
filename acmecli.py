@@ -7,61 +7,137 @@ import os
 import json
 import logging
 import warnings
-warnings.filterwarnings("ignore", message=".*urllib3.*only supports OpenSSL.*", module="urllib3")
 
 try:
+    # Hack: Supress warning on MacOS xcode-cli-tools python3.9 linked against MacOS libressl.
+    # Have to supress it before importing `requests`, because it fires in urllib3/__init__.py
+    warnings.filterwarnings("ignore", message=".*urllib3.*only supports OpenSSL.*", module="urllib3")
     import requests
     from joserfc import jws, jwk, errors
+    from joserfc import __version__ as joserfc_version
 except ImportError:
     print("You're missing `requests` library. pip install requests")
     sys.exit(1)
 
 
-class ACMEError(Exception):
-    pass
+__url__ = "https://github.com/pawlakus/acmecli"
+__version__ = "0.1-dev"
 
-class cliMustAccept(ACMEError):
-    pass
+############
+# ACMEClient
+############
 
-class cliMissingArgument(ACMEError):
-    pass
-class externalAccountRequired(ACMEError):
-    pass
-class accountDoesNotExist(ACMEError):
-    pass
+class ACMEError(Exception):pass
+class ACMEClientError(ACMEError):pass
+
+class ACMEProtocolError(ACMEError):
+    def __init__(self, response):
+        self.status_code = response.status_code
+        self.raw_text = response.text
+        try:
+            self.problem = response.json()
+        except ValueError:
+            self.problem = {}
+        self.type_urn = self.problem.get("type", "unknown:urn")
+        self.title = self.problem.get("title", "unknown")
+        self.detail = self.problem.get("detail", self.raw_text)
+        self.subproblems = self.problem.get("subproblems", [])
+        if self.subproblems:
+            msg = f"{self.status_code} {self.type_urn}: {self.title} - {self.detail} (Subproblems: {len(self.subproblems)})"
+        else:
+            msg = f"{self.status_code} {self.type_urn}: {self.title} - {self.detail}"
+        super().__init__(msg)
+
+class ACMEAccountDoesNotExist(ACMEProtocolError): pass
+class ACMEAlreadyRevoked(ACMEProtocolError): pass
+class ACMEBadCSR(ACMEProtocolError): pass
+class ACMEBadNonce(ACMEProtocolError): pass
+class ACMEBadPublicKey(ACMEProtocolError): pass
+class ACMEBadRevocationReason(ACMEProtocolError): pass
+class ACMEBadSignatureAlgorithm(ACMEProtocolError): pass
+class ACMECAAError(ACMEProtocolError): pass
+class ACMECompoundError(ACMEProtocolError): pass
+class ACMEConnectionError(ACMEProtocolError): pass
+class ACMEDNSError(ACMEProtocolError): pass
+class ACMEExternalAccountRequired(ACMEProtocolError): pass
+class ACMEIncorrectResponse(ACMEProtocolError): pass
+class ACMEInvalidContact(ACMEProtocolError): pass
+class ACMEMalformed(ACMEProtocolError): pass
+class ACMEOrderNotReady(ACMEProtocolError): pass
+class ACMERateLimited(ACMEProtocolError): pass
+class ACMERejectedIdentifier(ACMEProtocolError): pass
+class ACMEServerInternal(ACMEProtocolError): pass
+class ACMETLSError(ACMEProtocolError): pass
+class ACMEUnauthorized(ACMEProtocolError): pass
+class ACMEUnsupportedContact(ACMEProtocolError): pass
+class ACMEUnsupportedIdentifier(ACMEProtocolError): pass
+class ACMEUserActionRequired(ACMEProtocolError): pass
+
+ERROR_MAP = {
+    "accountDoesNotExist": ACMEAccountDoesNotExist,
+    "alreadyRevoked": ACMEAlreadyRevoked,
+    "badCSR": ACMEBadCSR,
+    "badNonce": ACMEBadNonce,
+    "badPublicKey": ACMEBadPublicKey,
+    "badRevocationReason": ACMEBadRevocationReason,
+    "badSignatureAlgorithm": ACMEBadSignatureAlgorithm,
+    "caa": ACMECAAError,
+    "compound": ACMECompoundError,
+    "connection": ACMEConnectionError,
+    "dns": ACMEDNSError,
+    "externalAccountRequired": ACMEExternalAccountRequired,
+    "incorrectResponse": ACMEIncorrectResponse,
+    "invalidContact": ACMEInvalidContact,
+    "malformed": ACMEMalformed,
+    "orderNotReady": ACMEOrderNotReady,
+    "rateLimited": ACMERateLimited,
+    "rejectedIdentifier": ACMERejectedIdentifier,
+    "serverInternal": ACMEServerInternal,
+    "tls": ACMETLSError,
+    "unauthorized": ACMEUnauthorized,
+    "unsupportedContact": ACMEUnsupportedContact,
+    "unsupportedIdentifier": ACMEUnsupportedIdentifier,
+    "userActionRequired": ACMEUserActionRequired,
+}
 
 
 class JOSESigner:
-    def __init__(self, key_path=None, key_content=None, kid=None):
-        self.jwk = None
+    def __init__(self, jwk_obj):
+        """
+        Use JOSESigner.load() to create instances from files.
+        """
+        self.jwk = jwk_obj
         self.alg = None
-        if key_path:
-            with open(key_path, "rb") as f:
-                content = f.read()
-            if key_path.endswith(('.json', '.js')):
-                self._load_json(content)
-            else:
-                self._load_auto(content)
-        elif key_content:
-            if isinstance(key_content, bytes) and kid:
-                self.jwk = jwk.OctKey.import_key(key_content, parameters={'kid': kid})
-            else:
-                self._load_auto(key_content)
-        if not self.jwk:
-            raise ValueError("Unable to load key")
-        # Only used if caller does not set it himself when calling self.sign()
         self._set_algorithm()
 
-    def _load_json(self, content):
-        self.jwk = jwk.import_key(json.loads(content))
-
-    def _load_auto(self, content):
+    @classmethod
+    def load(cls, file_path):
+        if not os.path.exists(file_path):
+            raise ACMEClientError(f"Key file not found: {file_path}")
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+        except OSError as e:
+            raise ACMEClientError(f"Error reading key file: {e}")
+        try:
+            data = json.loads(content)
+            jwk_obj = jwk.import_key(data)
+            return cls(jwk_obj)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass  # Not JSON
         for keytype in ["RSA", "EC", "OKP"]:
             try:
-                self.jwk = jwk.import_key(content, keytype)
-                return
+                jwk_obj = jwk.import_key(content, keytype)
+                return cls(jwk_obj)
             except errors.InvalidKeyTypeError:
                 continue
+        raise ACMEClientError("Unable to identify key format (Valid: PEM or JWK/JSON)")
+
+    @classmethod
+    def from_bytes(cls, content):
+        """Used for checking EAB HMAC keys (Octet)"""
+        jwk_obj = jwk.OctKey.import_key(content)
+        return cls(jwk_obj)
 
     def _set_algorithm(self):
         # Mapping per RFC 7518
@@ -75,11 +151,11 @@ class JOSESigner:
             try:
                 self.alg = ec_algs.get(self.jwk.curve_name)
             except KeyError:
-                raise ACMEError(f"Unsupported curve type: {self.jwk.curve_name}")
+                raise ACMEClientError(f"Unsupported curve type: {self.jwk.curve_name}")
         elif self.jwk.key_type == "oct":
             self.alg = "HS256"
-        if not self.alg:
-            raise ACMEError("Unsupported private key type.")
+        else:
+            raise ACMEClientError("Unsupported private key type.")
 
     def sign(self, protected_header, payload_str_or_bytes):
         if "alg" not in protected_header:
@@ -103,17 +179,35 @@ class JOSESigner:
 
 
 class ACMEClient:
-    def __init__(self, key_path, directory_url="https://acme-v02.api.letsencrypt.org/directory"):
-        self.logger = logging.getLogger(f"{self.__class__.__name__}")
+    def __init__(self, signer: JOSESigner, directory_url="https://acme-v02.api.letsencrypt.org/directory"):
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.directory_url = directory_url
-        self.key_path = key_path
-        self.key = self.key = JOSESigner(key_path=key_path)
+        self.key = signer
         self.session = requests.Session()
+        self.session.headers['User-Agent'] = f"acmecli/{__version__} ({__url__}) joserfc/{joserfc_version}"
+        self.account_uri = None
         self.nonce = None
         self.directory = None
         self.meta = {}
         self.external_account_required = False
         self.terms_of_service_url = None
+
+    def _check_response(self, response):
+        if 200 <= response.status_code < 300:
+            return
+        try:
+            problem = response.json()
+            urn = problem.get("type", "")
+        except ValueError:
+            raise ACMEProtocolError(response)
+
+        namespace = "urn:ietf:params:acme:error:"
+        if urn.startswith(namespace):
+            short_type = urn[len(namespace):]
+            if short_type in ERROR_MAP:
+                raise ERROR_MAP[short_type](response)
+        # Generic fallback for unknown URNs or non-standard errors
+        raise ACMEProtocolError(response)
 
     def _get_directory(self):
         self.logger.debug("Obtaining directory json.")
@@ -163,7 +257,7 @@ class ACMEClient:
             raise ValueError("EAB HMAC key must be base64url encoded.")
 
         try:
-            hmac_key = JOSESigner(key_content=key_bytes, kid=eab_kid)
+            hmac_key = JOSESigner.from_bytes(key_bytes)
             hmac_key.alg = eab_alg
         except Exception as e:
             raise ValueError(f"Failed to import HMAC key: {e}")
@@ -183,48 +277,11 @@ class ACMEClient:
             payload = json.dumps(payload, separators=(',', ':'))
         signed_data = self._sign(payload, url, kid)
         self.logger.debug(json.dumps(signed_data, indent=2))
-        #raise ACMEError("debug pause")
         headers = {"Content-Type": "application/jose+json"}
         resp = self.session.request(method, url, json=signed_data, headers=headers, allow_redirects=allow_redirects)
         self.nonce = resp.headers.get('Replay-Nonce')
+        self._check_response(resp)
         return resp
-
-    def _get_error(self, response):
-        rfc8555_errors = {
-            'accountDoesNotExist',
-            'badNonce',
-            'badPublicKey',
-            'badSignatureAlgorithm',
-            'compound',
-            'externalAccountRequired',
-            'invalidContact',
-            'malformed',
-            'rateLimited',
-            'serverInternal',
-            'unauthorized',
-            'unsupportedContact'
-        }
-        if response.status_code >= 400:
-            try:
-                error = json.loads(response.text)
-                type_uri = error["type"]
-                type_ns = "urn:ietf:params:acme:error:"
-                title = error.get("title")
-                detail = error.get("detail", "")
-                if title:
-                    error_msg = f"{title}: {detail}"
-                else:
-                    error_msg = detail
-                if not type_uri.startswith(type_ns):
-                    return None, f"Unknown error type: {response.text}"
-                type = type_uri[len(type_ns):]
-                if type not in rfc8555_errors:
-                    return None, f"Unsupported error type: {response.text}"
-                return type, error_msg
-            except (ValueError, KeyError):
-                return None, f"Unknown error: {response.text}"
-        else:
-            return None, ""
 
     def get_metadata(self):
         if not self.directory:
@@ -242,12 +299,6 @@ class ACMEClient:
         self.logger.debug("Obtaining account.")
         payload = {"onlyReturnExisting": True}
         resp = self._request("POST", self.directory['newAccount'], payload, allow_redirects=False)
-        if resp.status_code not in [200, 201]:
-            error, error_msg = self._get_error(resp)
-            if error == 'accountDoesNotExist':
-                raise accountDoesNotExist(f"{error}: {error_msg}")
-            else:
-                raise ACMEError(f"Failed to retrieve account: {error}: {error_msg}")
         return resp.headers.get('Location'), resp.json()
 
     def thumbprint(self):
@@ -263,7 +314,6 @@ class ACMEClient:
 
     def update_contact(self, contacts):
         account_url, _ = self.get_account()
-
         if len(contacts) == 1 and contacts[0].lower() == "clear":
             payload_contacts = []
         else:
@@ -272,12 +322,7 @@ class ACMEClient:
         self.logger.debug(f"Updating account with: {payload}")
         # RFC 8555 7.3.2: Account Update
         resp = self._request("POST", account_url, payload, kid=account_url)
-        if resp.status_code != 200:
-            error, error_msg = self._get_error(resp)
-            print(f"Update failed. {error}: {error_msg}")
-        else:
-            print("Account updated successfully.")
-            print(json.dumps(resp.json(), indent=2))
+        return resp.json()
 
     def create_account(self, contacts, eab_kid=None, eab_hmac_key=None, eab_alg="HS256", agree_tos=False):
         if not self.directory:
@@ -285,13 +330,9 @@ class ACMEClient:
 
         try:
             account_url, _ = self.get_account()
-            raise ACMEError(f"Account already created: {account_url}")
-        except accountDoesNotExist:
+            raise ACMEClientError(f"Account already created: {account_url}")
+        except ACMEAccountDoesNotExist:
             pass
-
-        # Check EAB Requirements
-        if self.external_account_required and not (eab_kid and eab_hmac_key):
-            raise ACMEError("This ACMEv2 server required External Account Binding.")
 
         payload = {}
         if contacts:
@@ -303,28 +344,17 @@ class ACMEClient:
         if eab_kid and eab_hmac_key:
             self.logger.debug(f"Calculating EAB using {eab_alg}")
             try:
-                # The URL in EAB must match the request URL
                 new_account_url = self.directory['newAccount']
                 eab_jws = self._sign_eab(eab_kid, eab_hmac_key, eab_alg, new_account_url)
                 payload["externalAccountBinding"] = eab_jws
-            except ValueError as e:
-                print(f"EAB Error: {e}")
-                sys.exit(1)
+            except Exception as ex:
+                raise ACMEClientError(f"EAB Calculation Failed: {ex}")
 
         self.logger.debug(f"Creating account with payload: {payload}")
         resp = self._request("POST", self.directory['newAccount'], payload, allow_redirects=False)
+        return resp.headers.get('Location'), resp.json()
 
-        if resp.status_code in [200, 201]:
-            print("Account created/retrieved successfully.")
-            account_url = resp.headers.get('Location')
-            print(f"Account URI: {account_url}")
-            print("Account Data:")
-            print(json.dumps(resp.json(), indent=2))
-        else:
-            error, error_msg = self._get_error(resp)
-            print(f"Account creation failed. {error}: {error_msg}")
-
-    def change_account_key(self, new_key_path):
+    def change_account_key(self, new_key_signer: JOSESigner):
         """
         RFC 8555 7.3.5: Account Key Rollover
         """
@@ -332,50 +362,37 @@ class ACMEClient:
             self._get_directory()
         key_change_url = self.directory.get('keyChange')
         if not key_change_url:
-            raise ACMEError("Server does not support keyChange.")
-        try:
-            new_key_signer = JOSESigner(key_path=new_key_path)
-        except Exception as e:
-            raise ValueError(f"Failed to load new key from {new_key_path}: {e}")
-
+            raise ACMEClientError("Server does not support keyChange endpoint.")
         account_url, _ = self.get_account()
-
-        self.logger.debug("Account rekeying. Creating inner payload.")
         inner_payload = {
             "account": account_url,
             "oldKey": self.key.get_public_jwk()
         }
-        inner_payload_json = json.dumps(inner_payload, separators=(',', ':'))
-        inner_protected_header = {
-            "alg": new_key_signer.alg,
-            "jwk": new_key_signer.get_public_jwk(),
-            "url": key_change_url
-        }
-        inner_jws = new_key_signer.sign(inner_protected_header, inner_payload_json)
-        self.logger.debug(f"inner_jws: {json.dumps(inner_jws)}")
-
-        self.logger.debug(f"Sending rekey request to {key_change_url}")
+        inner_jws = new_key_signer.sign(
+            protected_header={
+                "alg": new_key_signer.alg,
+                "jwk": new_key_signer.get_public_jwk(),
+                "url": key_change_url
+            },
+            payload_str_or_bytes=json.dumps(inner_payload, separators=(',', ':'))
+        )
         resp = self._request("POST", key_change_url, inner_jws, kid=account_url)
-        if resp.status_code == 200:
-            print("Key rollover successful.")
-            print(json.dumps(resp.json(), indent=2))
-        else:
-            error, error_msg = self._get_error(resp)
-            raise ACMEError(f"Key rollover failed. {error}: {error_msg}")
+        return resp.json()
 
     def deactivate_account(self, confirm=False):
         account_url, _ = self.get_account()
         if not confirm:
-            raise cliMustAccept("Deactivation requires confirmation from the user.")
+            raise ACMEClientError("Deactivation requires confirmation.")
         payload = {"status": "deactivated"}
         self.logger.info(f"Deactivating account {account_url}")
         resp = self._request("POST", account_url, payload, kid=account_url)
-        if resp.status_code == 200:
-            print("Account deactivated successfully.")
-            print(json.dumps(resp.json(), indent=2))
-        else:
-            error, error_msg = self._get_error(resp)
-            print(f"Deactivation failed. {error}: {error_msg}")
+        return resp.json()
+
+
+#######
+# CLI
+#######
+
 
 def cli_account_show(client: ACMEClient, args):
     try:
@@ -385,14 +402,31 @@ def cli_account_show(client: ACMEClient, args):
             print(f"Account status: {account_data.get('status')}")
             print("Account data:")
             print(json.dumps(account_data, indent=2))
+    except ACMEAccountDoesNotExist as ex:
+        print(f"Error: Account does not exist: {ex}", file=sys.stderr)
+        sys.exit(1)
+    except ACMEUnauthorized as ex:
+        print(f"Error: Unauthorized: {ex}", file=sys.stderr)
+        sys.exit(1)
     except Exception as ex:
-        print(ex)
+        print(ex, file=sys.stderr)
+        sys.exit(1)
 
 def cli_account_update(client: ACMEClient, args):
     try:
-        client.update_contact(args.contacts)
-    except accountDoesNotExist as ex:
-        print(ex)
+        account_uri, _ = client.get_account()
+        response_data = client.update_contact(args.contacts)
+        print(f"Account updated: {account_uri}")
+        print(f"New contacts: {args.contacts}")
+        print(json.dumps(response_data, indent=2))
+    except ACMEAccountDoesNotExist as ex:
+        print(f"Error: Account does not exist: {ex}", file=sys.stderr)
+        sys.exit(1)
+    except ACMEUnauthorized as ex:
+        print(f"Error: Unauthorized: {ex}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as ex:
+        print(ex, file=sys.stderr)
         sys.exit(1)
 
 def cli_account_create(client: ACMEClient, args):
@@ -400,7 +434,7 @@ def cli_account_create(client: ACMEClient, args):
         account_uri, _ = client.get_account()
         print(f"Account already exist: {account_uri}")
         sys.exit(0)
-    except accountDoesNotExist:
+    except ACMEAccountDoesNotExist:
         pass
     acme = client.get_metadata()
     if acme.get('terms_of_service_url') and not args.agree_tos:
@@ -411,16 +445,21 @@ def cli_account_create(client: ACMEClient, args):
             sys.exit(1)
         args.agree_tos = True
     try:
-        client.create_account(
+        account_uri, account_data = client.create_account(
             contacts=args.contacts,
             eab_kid=args.eab_kid,
             eab_hmac_key=args.eab_hmac_key,
             eab_alg=args.eab_alg,
             agree_tos=args.agree_tos
         )
-    except externalAccountRequired as ex:
-        print(f"Unable to create account, {acme.get('url')} requires External Account Binding:")
-        print(ex)
+        print(f"Account created: {account_uri}")
+        print(json.dumps(account_data, indent=2))
+    except ACMEExternalAccountRequired as ex:
+        print(f"Error: This ACMEv2 server required External Account Binding parameters.", file=sys.stderr)
+        print(ex, file=sys.stderr)
+        sys.exit(1)
+    except Exception as ex:
+        print(ex, file=sys.stderr)
         sys.exit(1)
 
 def cli_account_rekey(client: ACMEClient, args):
@@ -428,25 +467,37 @@ def cli_account_rekey(client: ACMEClient, args):
         print(f"Error: New key file not found at {args.new_key}")
         sys.exit(1)
     try:
-        account_uri, _ = client.get_account()
-    except accountDoesNotExist:
-        print(f"Unable to rekey: no account exist with the provided key {client.key_path}")
+        new_key_signer = JOSESigner.load(args.new_key)
+    except ACMEClientError as ex:
+        print(f"Error loading new key: {ex}", file=sys.stderr)
         sys.exit(1)
-    print(f"Rolling over new key for account {account_uri}")
-    print(f"Old Key: {client.key_path}")
+    try:
+        account_uri, _ = client.get_account()
+    except ACMEAccountDoesNotExist as ex:
+        print(f"Error: Unable to rekey: no account exist with the provided key.")
+        print(ex, file=sys.stderr)
+        sys.exit(1)
+    print(f"Rolling over new key for account: {account_uri}")
+    print(f"Old Key: {args.key}")
     print(f"New Key: {args.new_key}")
     try:
-        client.change_account_key(args.new_key)
-    except ACMEError as ex:
-        print(ex)
+        response_data = client.change_account_key(new_key_signer)
+        print(f"Account rekeyed: {account_uri}")
+        print(json.dumps(response_data, indent=2))
+    except Exception as ex:
+        print(ex, file=sys.stderr)
         sys.exit(1)
 
 def cli_account_deactivate(client: ACMEClient, args):
     try:
         account_uri, _ = client.get_account()
-    except accountDoesNotExist:
-        print("Can't deactivate: account does not exist.")
+    except ACMEAccountDoesNotExist:
+        print("Can not deactivate: account does not exist.")
         sys.exit(0)
+    except Exception as ex:
+        print(ex, file=sys.stderr)
+        sys.exit(1)
+
     if not args.confirm:
         print("!!! WARNING !!!")
         print(f"You are about to deactivate your ACME account: {account_uri}")
@@ -460,7 +511,13 @@ def cli_account_deactivate(client: ACMEClient, args):
             print("Deactivation aborted by user.")
             sys.exit(0)
         args.confirm = True
-    client.deactivate_account(confirm=args.confirm)
+    try:
+        response_data = client.deactivate_account(confirm=args.confirm)
+        print(f"Account deactivated: {account_uri}")
+        print(json.dumps(response_data, indent=2))
+    except Exception as ex:
+        print(ex, file=sys.stderr)
+        sys.exit(1)
 
 def cli_key_thumbprint(client: ACMEClient, args):
     thumbprint = client.thumbprint()
@@ -530,16 +587,14 @@ def cli():
         print(f"Error: Private key not found at {args.key}")
         sys.exit(1)
 
-
     try:
-        client = ACMEClient(args.key, directory_url=acme_url)
-
+        signer = JOSESigner.load(args.key)
+        client = ACMEClient(signer=signer, directory_url=acme_url)
         if args.main_action == "account":
             if args.account_action == "show":
                 cli_account_show(client, args)
             elif args.account_action == "update":
                 cli_account_update(client, args)
-                client.update_contact(args.contacts)
             elif args.account_action == "create":
                 cli_account_create(client, args)
             elif args.account_action == "rekey":
@@ -551,8 +606,12 @@ def cli():
                 cli_key_thumbprint(client, args)
             elif args.key_action == "convert":
                 print(client.get_private_key(args.format))
-    except ACMEError as ex:
-        print(ex)
+    except ACMEClientError as ex:
+        print(f"ClientError: {ex}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as ex:
+        print(f"CRITICAL: Unhandled exception:", file=sys.stderr)
+        print(ex, file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":
