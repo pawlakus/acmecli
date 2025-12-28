@@ -173,7 +173,7 @@ class JOSESigner:
         return self.jwk.thumbprint()
 
     def as_pem(self):
-        return self.jwk.as_pem().decode("ascii")
+        return self.jwk.as_pem()
 
     def as_json(self):
         return json.dumps(self.jwk.as_dict(), indent=2)
@@ -308,7 +308,7 @@ class ACMEClient:
         if format == "pem":
             return self.key.as_pem().decode("ascii")
         elif format == "json":
-            return json.dumps(self.key.as_dict(), indent=2)
+            return self.key.as_json()
         else:
             raise ValueError(f"Unknown private key format: {format}")
 
