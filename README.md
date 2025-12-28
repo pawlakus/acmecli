@@ -204,11 +204,13 @@ For `lego`, place the resulting PEM file in `.lego/accounts/` - *TODO*
   it does not matter where it writes a file, as long as your webservers are
   prepared upfront.
 
-For `CertManager`, generate `Kubernetes` `Secret` and `Issuer` objects - *TODO*.
+For `CertManager`, generate `Kubernetes` `Secret` and `Issuer` objects
+
+* TODO: *Provide a detailed way to import ACMEv2 account to CertManager*.
 
 * does `CertManager` supports `stateless http-01` without trying to
     alter Ingress? *TODO: Investigate*
-* certainly `CertManage`r does not support `dns-persitent-01`.
+* certainly `CertManager` does not support `dns-persitent-01`.
 
 # Stateless http-01
 
