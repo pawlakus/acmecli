@@ -14,9 +14,14 @@ try:
     warnings.filterwarnings("ignore", message=".*urllib3.*only supports OpenSSL.*", module="urllib3")
     import requests
     from joserfc import jws, jwk, errors
+    from joserfc import __version__ as joserfc_version
 except ImportError:
     print("You're missing `requests` library. pip install requests")
     sys.exit(1)
+
+
+__url__ = "https://github.com/pawlakus/acmecli"
+__version__ = "0.1-dev"
 
 ############
 # ACMEClient
@@ -97,36 +102,42 @@ ERROR_MAP = {
 
 
 class JOSESigner:
-    def __init__(self, key_path=None, key_content=None, kid=None):
-        self.jwk = None
+    def __init__(self, jwk_obj):
+        """
+        Use JOSESigner.load() to create instances from files.
+        """
+        self.jwk = jwk_obj
         self.alg = None
-        if key_path:
-            with open(key_path, "rb") as f:
-                content = f.read()
-            if key_path.endswith(('.json', '.js')):
-                self._load_json(content)
-            else:
-                self._load_auto(content)
-        elif key_content:
-            if isinstance(key_content, bytes) and kid:
-                self.jwk = jwk.OctKey.import_key(key_content, parameters={'kid': kid})
-            else:
-                self._load_auto(key_content)
-        if not self.jwk:
-            raise ValueError("Unable to load key")
-        # Only used if caller does not set it himself when calling self.sign()
         self._set_algorithm()
 
-    def _load_json(self, content):
-        self.jwk = jwk.import_key(json.loads(content))
-
-    def _load_auto(self, content):
+    @classmethod
+    def load(cls, file_path):
+        if not os.path.exists(file_path):
+            raise ACMEClientError(f"Key file not found: {file_path}")
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+        except OSError as e:
+            raise ACMEClientError(f"Error reading key file: {e}")
+        try:
+            data = json.loads(content)
+            jwk_obj = jwk.import_key(data)
+            return cls(jwk_obj)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass  # Not JSON
         for keytype in ["RSA", "EC", "OKP"]:
             try:
-                self.jwk = jwk.import_key(content, keytype)
-                return
+                jwk_obj = jwk.import_key(content, keytype)
+                return cls(jwk_obj)
             except errors.InvalidKeyTypeError:
                 continue
+        raise ACMEClientError("Unable to identify key format (Valid: PEM or JWK/JSON)")
+
+    @classmethod
+    def from_bytes(cls, content):
+        """Used for checking EAB HMAC keys (Octet)"""
+        jwk_obj = jwk.OctKey.import_key(content)
+        return cls(jwk_obj)
 
     def _set_algorithm(self):
         # Mapping per RFC 7518
@@ -140,11 +151,11 @@ class JOSESigner:
             try:
                 self.alg = ec_algs.get(self.jwk.curve_name)
             except KeyError:
-                raise ACMEError(f"Unsupported curve type: {self.jwk.curve_name}")
+                raise ACMEClientError(f"Unsupported curve type: {self.jwk.curve_name}")
         elif self.jwk.key_type == "oct":
             self.alg = "HS256"
-        if not self.alg:
-            raise ACMEError("Unsupported private key type.")
+        else:
+            raise ACMEClientError("Unsupported private key type.")
 
     def sign(self, protected_header, payload_str_or_bytes):
         if "alg" not in protected_header:
@@ -168,15 +179,13 @@ class JOSESigner:
 
 
 class ACMEClient:
-    def __init__(self, key_path, directory_url="https://acme-v02.api.letsencrypt.org/directory"):
+    def __init__(self, signer: JOSESigner, directory_url="https://acme-v02.api.letsencrypt.org/directory"):
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.directory_url = directory_url
-        self.key_path = key_path
-        try:
-            self.key = self.key = JOSESigner(key_path=key_path)
-        except Exception as ex:
-            raise ACMEClientError(f"Could not load key: {ex}")
+        self.key = signer
         self.session = requests.Session()
+        self.session.headers['User-Agent'] = f"acmecli/{__version__} ({__url__}) joserfc/{joserfc_version}"
+        self.account_uri = None
         self.nonce = None
         self.directory = None
         self.meta = {}
@@ -248,7 +257,7 @@ class ACMEClient:
             raise ValueError("EAB HMAC key must be base64url encoded.")
 
         try:
-            hmac_key = JOSESigner(key_content=key_bytes, kid=eab_kid)
+            hmac_key = JOSESigner.from_bytes(key_bytes)
             hmac_key.alg = eab_alg
         except Exception as e:
             raise ValueError(f"Failed to import HMAC key: {e}")
@@ -273,43 +282,6 @@ class ACMEClient:
         self.nonce = resp.headers.get('Replay-Nonce')
         self._check_response(resp)
         return resp
-
-    def _get_error(self, response):
-        rfc8555_errors = {
-            'accountDoesNotExist',
-            'badNonce',
-            'badPublicKey',
-            'badSignatureAlgorithm',
-            'compound',
-            'externalAccountRequired',
-            'invalidContact',
-            'malformed',
-            'rateLimited',
-            'serverInternal',
-            'unauthorized',
-            'unsupportedContact'
-        }
-        if response.status_code >= 400:
-            try:
-                error = json.loads(response.text)
-                type_uri = error["type"]
-                type_ns = "urn:ietf:params:acme:error:"
-                title = error.get("title")
-                detail = error.get("detail", "")
-                if title:
-                    error_msg = f"{title}: {detail}"
-                else:
-                    error_msg = detail
-                if not type_uri.startswith(type_ns):
-                    return None, f"Unknown error type: {response.text}"
-                type = type_uri[len(type_ns):]
-                if type not in rfc8555_errors:
-                    return None, f"Unsupported error type: {response.text}"
-                return type, error_msg
-            except (ValueError, KeyError):
-                return None, f"Unknown error: {response.text}"
-        else:
-            return None, ""
 
     def get_metadata(self):
         if not self.directory:
@@ -382,7 +354,7 @@ class ACMEClient:
         resp = self._request("POST", self.directory['newAccount'], payload, allow_redirects=False)
         return resp.headers.get('Location'), resp.json()
 
-    def change_account_key(self, new_key_path):
+    def change_account_key(self, new_key_signer: JOSESigner):
         """
         RFC 8555 7.3.5: Account Key Rollover
         """
@@ -391,10 +363,6 @@ class ACMEClient:
         key_change_url = self.directory.get('keyChange')
         if not key_change_url:
             raise ACMEClientError("Server does not support keyChange endpoint.")
-        try:
-            new_key_signer = JOSESigner(key_path=new_key_path)
-        except Exception as ex:
-            raise ACMEClientError(f"Failed to load new key from {new_key_path}: {ex}")
         account_url, _ = self.get_account()
         inner_payload = {
             "account": account_url,
@@ -499,16 +467,21 @@ def cli_account_rekey(client: ACMEClient, args):
         print(f"Error: New key file not found at {args.new_key}")
         sys.exit(1)
     try:
+        new_key_signer = JOSESigner.load(args.new_key)
+    except ACMEClientError as ex:
+        print(f"Error loading new key: {ex}", file=sys.stderr)
+        sys.exit(1)
+    try:
         account_uri, _ = client.get_account()
     except ACMEAccountDoesNotExist as ex:
-        print(f"Error: Unable to rekey: no account exist with the provided key {client.key_path}.")
+        print(f"Error: Unable to rekey: no account exist with the provided key.")
         print(ex, file=sys.stderr)
         sys.exit(1)
     print(f"Rolling over new key for account: {account_uri}")
-    print(f"Old Key: {client.key_path}")
+    print(f"Old Key: {args.key}")
     print(f"New Key: {args.new_key}")
     try:
-        response_data = client.change_account_key(args.new_key)
+        response_data = client.change_account_key(new_key_signer)
         print(f"Account rekeyed: {account_uri}")
         print(json.dumps(response_data, indent=2))
     except Exception as ex:
@@ -615,13 +588,13 @@ def cli():
         sys.exit(1)
 
     try:
-        client = ACMEClient(args.key, directory_url=acme_url)
+        signer = JOSESigner.load(args.key)
+        client = ACMEClient(signer=signer, directory_url=acme_url)
         if args.main_action == "account":
             if args.account_action == "show":
                 cli_account_show(client, args)
             elif args.account_action == "update":
                 cli_account_update(client, args)
-                client.update_contact(args.contacts)
             elif args.account_action == "create":
                 cli_account_create(client, args)
             elif args.account_action == "rekey":
@@ -633,6 +606,9 @@ def cli():
                 cli_key_thumbprint(client, args)
             elif args.key_action == "convert":
                 print(client.get_private_key(args.format))
+    except ACMEClientError as ex:
+        print(f"ClientError: {ex}", file=sys.stderr)
+        sys.exit(1)
     except Exception as ex:
         print(f"CRITICAL: Unhandled exception:", file=sys.stderr)
         print(ex, file=sys.stderr)
