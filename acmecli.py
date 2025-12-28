@@ -108,6 +108,7 @@ class JOSESigner:
         """
         self.jwk = jwk_obj
         self.alg = None
+        self.crv = None
         self._set_algorithm()
 
     @classmethod
@@ -143,13 +144,14 @@ class JOSESigner:
         # Mapping per RFC 7518
         ec_algs = {
             "P-256": "ES256", "P-384": "ES384",
-            "P-521": "ES512", "Ed25519": "Ed25519"
+            "P-521": "ES512", "Ed25519": "EdDSA"
         }
         if self.jwk.key_type == "RSA":
             self.alg = "RS256"
         elif self.jwk.key_type in ["EC", "OKP"]:
             try:
                 self.alg = ec_algs.get(self.jwk.curve_name)
+                self.crv = self.jwk.curve_name
             except KeyError:
                 raise ACMEClientError(f"Unsupported curve type: {self.jwk.curve_name}")
         elif self.jwk.key_type == "oct":
@@ -160,7 +162,6 @@ class JOSESigner:
     def sign(self, protected_header, payload_str_or_bytes):
         if "alg" not in protected_header:
             protected_header["alg"] = self.alg
-
         registry = jws.JWSRegistry(algorithms=[protected_header["alg"]], strict_check_header=False)
         member = {"protected": protected_header}
         return jws.serialize_json(member, payload=payload_str_or_bytes, private_key=self.jwk, registry=registry)
@@ -231,7 +232,6 @@ class ACMEClient:
 
     def _sign(self, payload_str_or_bytes, url, kid=None):
         protected = {
-            "alg": self.key.alg,
             "nonce": self._get_nonce(),
             "url": url
         }
