@@ -150,7 +150,7 @@ class JOSESigner:
             self.alg = "RS256"
         elif self.jwk.key_type in ["EC", "OKP"]:
             try:
-                self.alg = ec_algs.get(self.jwk.curve_name)
+                self.alg = ec_algs[self.jwk.curve_name]
                 self.crv = self.jwk.curve_name
             except KeyError:
                 raise ACMEClientError(f"Unsupported curve type: {self.jwk.curve_name}")
