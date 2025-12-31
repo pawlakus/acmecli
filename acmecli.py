@@ -14,7 +14,11 @@ try:
     warnings.filterwarnings("ignore", message=".*urllib3.*only supports OpenSSL.*", module="urllib3")
     import requests
     from joserfc import jws, jwk, errors
+    import cryptography.hazmat.primitives.serialization as crypto_hps
     from joserfc import __version__ as joserfc_version
+
+
+
 except ImportError:
     print("You're missing `requests` library. pip install requests")
     sys.exit(1)
@@ -306,7 +310,18 @@ class ACMEClient:
 
     def get_private_key(self, format="pem"):
         if format == "pem":
-            return self.key.as_pem().decode("ascii")
+            return self.key.as_pem()
+        elif format in {"pkcs1", "pkcs8", "der1", "der8"}:
+            crypto_encoding = crypto_hps.Encoding.PEM
+            if format.startswith("der"): crypto_encoding = crypto_hps.Encoding.DER
+            crypto_format = crypto_hps.PrivateFormat.PKCS8
+            if format in {"pkcs1", "der1"}: crypto_format = crypto_hps.PrivateFormat.TraditionalOpenSSL
+            raw = self.key.jwk.raw_value
+            return raw.private_bytes(
+                encoding=crypto_encoding,
+                format=crypto_format,
+                encryption_algorithm=crypto_hps.NoEncryption()
+            )
         elif format == "json":
             return self.key.as_json()
         else:
@@ -532,6 +547,19 @@ def cli_key_thumbprint(client: ACMEClient, args):
     if args.details:
         print(message)
 
+def cli_key_convert(client: ACMEClient, args):
+    format = args.format.lower()
+    response = client.get_private_key(format)
+    if isinstance(response, bytes):
+        if format in {'pem', 'pkcs1', 'pkcs8', 'json'}:
+            print(response.decode("ascii"))
+        else:
+            print("Warning: Binary format chosen, sending binary to stdout. Redirect to a file.", file=sys.stderr)
+            sys.stdout.buffer.write(response)
+            sys.stdout.buffer.flush()
+    else:
+        print(response)
+
 def cli():
     parser = argparse.ArgumentParser(
         prog="acmecli.py",
@@ -553,8 +581,7 @@ def cli():
     create_parser.add_argument("--eab-kid", help="Key Identifier for External Account Binding")
     create_parser.add_argument("--eab-hmac-key", help="HMAC Key for External Account Binding (Base64Url)")
     create_parser.add_argument("--eab-alg", choices=["HS256", "HS384", "HS512"], default="HS256", help="Algorithm for EAB (default: HS256)")
-    group = create_parser.add_mutually_exclusive_group()
-    group.add_argument("--agree-tos", action="store_true", help="Agree to Terms of Service automatically")
+    create_parser.add_argument("--agree-tos", required=False, default=False, help="Agree to Terms of Service automatically")
     rekey_parser = account_subparsers.add_parser("rekey", help="Change account keys (Rollover)")
     rekey_parser.add_argument("new_key", type=str, help="Path to the NEW private key file")
     deactivate_parser = account_subparsers.add_parser("deactivate", help="Deactivate account")
@@ -564,8 +591,8 @@ def cli():
     key_subparsers = key_parser.add_subparsers(dest="key_action", required=True)
     thumbprint_parser = key_subparsers.add_parser("thumbprint", help="Print key thumbprint")
     thumbprint_parser.add_argument("-d", "--details", action='store_true')
-    convert_parser = key_subparsers.add_parser("convert", help="Convert key format")
-    convert_parser.add_argument("format", choices=["pem", "json"], help="Output format")
+    convert_parser = key_subparsers.add_parser("convert", help="Convert key format. Writes to stdout, even binary formats!")
+    convert_parser.add_argument("format", choices=["pem", "json", "pkcs1", "pkcs8", "der1", "der8"], help="Output format. JSON, PEM (default), PEM PKCS#1 or PKCS#8, DER PKCS#1 or PKCS#8")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
@@ -605,7 +632,7 @@ def cli():
             if args.key_action == "thumbprint":
                 cli_key_thumbprint(client, args)
             elif args.key_action == "convert":
-                print(client.get_private_key(args.format))
+                cli_key_convert(client, args)
     except ACMEClientError as ex:
         print(f"ClientError: {ex}", file=sys.stderr)
         sys.exit(1)
