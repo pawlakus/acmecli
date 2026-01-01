@@ -39,7 +39,7 @@ Currently, `acmecli.py` does not obtain certificates on its own. Adding this fun
 ## Usage:
 
 ```text
-usage: acmecli.py [-h] [-v] [-a ACME_URL] -k KEY {account,key} ...
+usage: acmecli.py [-h] [-v] [-a ACME_URL] -k FILE {account,key} ...
 
 positional arguments:
   {account,key}
@@ -50,7 +50,7 @@ options:
   -h, --help            show this help message and exit
   -v, --verbose
   -a ACME_URL, --acme-url ACME_URL
-  -k KEY, --key KEY     Path to the private key file
+  -k FILE, --key FILE   Path to the private key file
 
 Epilog:
 [-a | --acme-url] can be either a full https://.../directory, or a keyword:
