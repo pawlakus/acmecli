@@ -582,7 +582,7 @@ def cli():
     )
     parser.add_argument("-v", "--verbose", action='store_true', default=False)
     parser.add_argument("-a", "--acme-url", type=str, default="https://acme-v02.api.letsencrypt.org/directory")
-    parser.add_argument("-k", "--key", type=str, required=True, help="Path to the private key file")
+    parser.add_argument("-k", "--key", metavar="FILE", type=str, required=True, help="Path to the private key file")
     subparsers = parser.add_subparsers(dest="main_action", required=True)
     # Account Parser
     account_epilog = textwrap.dedent("""
