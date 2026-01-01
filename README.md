@@ -70,6 +70,89 @@ acmecli.py -k ... key thumbprint [-d]            calculates your account public 
 acmecli.py -k ... key convert                    converts your account private key to a different format.
 ```
 
+### Account key usage
+
+```text
+$ acmecli.py key -h
+usage: acmecli.py key [-h] {thumbprint,convert} ...
+
+positional arguments:
+  {thumbprint,convert}
+    thumbprint          Print key thumbprint
+    convert             Convert key format. Writes to stdout, even binary formats!
+
+options:
+  -h, --help            show this help message and exit
+
+Account private key - offline operation:
+acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
+acmecli.py -k ... key convert                    converts your account private key to a different format.
+
+Account private key conversions:
+acmecli.py -k ... key convert pem   > out.pem    convert to PEM format. Depending on cryptography version, either PKCS#1 or PKCS#8.
+acmecli.py -k ... key convert pkcs1 > out.pem    convert to PEM encoded as PKCS1. (BEGIN RSA PRIVATE KEY | BEGIN EC PRIVATE KEY).
+acmecli.py -k ... key convert pkcs8 > out.pem    convert to PEM encoded as PKCS8. (BEGIN PRIVATE KEY).
+acmecli.py -k ... key convert der1  > out.der    convert to DER encoded as PKCS1. (Binary).
+acmecli.py -k ... key convert der8  > out.der    convert to DER encoded as PKCS8. (Binary).
+acmecli.py -k ... key convert json  > out.json   convert to JSON Web Key format. (JSON, for certbot).
+```
+
+### Account management
+
+```text
+$ ./acmecli.py account -h
+usage: acmecli.py account [-h] {show,update,create,rekey,deactivate} ...
+
+positional arguments:
+  {show,update,create,rekey,deactivate}
+    show                Show account details
+    update              Update account contacts
+    create              Create new account
+    rekey               Change account keys (Rollover)
+    deactivate          Deactivate account
+
+options:
+  -h, --help            show this help message and exit
+
+acmecli.py -k ... account create \
+--eab-kid EAB_KEYID
+--eab-hmac-key EAB_HMAC_KEY_BASE64
+--eab-alg {HS256,HS384,HS512}
+--agree-tos
+
+    Creates a new ACMEv2 account. Before running this, you must generate a key file:
+
+    # RSA key (Standard compatibility)
+    openssl genrsa -out rsa.pem 3072
+
+    # ECDSA - NIST P-256 (Modern standard)
+    openssl ecparam -name prime256v1 -noout -genkey -out p256.pem
+
+    # ECDSA - NIST P-384
+    openssl ecparam -name secp384r1 -noout -genkey -out p384.pem
+
+    # ECDSA - NIST P-521
+    openssl ecparam -name secp521r1 -noout -genkey -out p521.pem
+
+acmecli.py -k ... account update \
+[mailto:user@example.com mailto:admin@example.net ... | clear]
+
+    Updates your contact details. Contacts must be provided as a list.
+    Prefix each contact with `mailto:`.
+    WARNING: The magic word `clear` will remove all current contacts.
+    Per RFC 8555, contacts are OPTIONAL, though some CAs (like pki.goog) require at
+    least one contact.
+
+acmecli.py -k ... account rekey newkey.pem
+    Rekey your ACMEv2 account with a new private key.
+    WARNING: This will change your key thumbprint but preserve your current account_uri.
+
+acmecli.py -k ... account deactivate
+    WARNING: This will permanently deactivate your account_uri AND invalidate the
+    associated private key for this provider. You will not be able to reuse this
+    private key on this ACMEv2 server again.
+```
+
 ## ACMEv2 Account Basics
 
 1. **Key generation** - The user creates an **asymmetric private key** (RSA, EC).
