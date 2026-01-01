@@ -208,7 +208,7 @@ openssl ecparam -name secp384r1 -noout -genkey -out p384.pem
 # ECDSA - NIST P-521
 openssl ecparam -name secp521r1 -noout -genkey -out p521.pem
 
-# Ed25519 - NOTE: Not currently supported by Let's Encrypt or Google Trust Services
+# Ed25519 - deprecated:
 openssl genpkey -algorithm ed25519 -out ed25519.pem
 ```
 
