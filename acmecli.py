@@ -2,10 +2,11 @@
 
 import argparse
 import base64
-import sys
-import os
 import json
 import logging
+import os
+import sys
+import textwrap
 import warnings
 
 try:
@@ -16,11 +17,8 @@ try:
     from joserfc import jws, jwk, errors
     import cryptography.hazmat.primitives.serialization as crypto_hps
     from joserfc import __version__ as joserfc_version
-
-
-
 except ImportError:
-    print("You're missing `requests` library. pip install requests")
+    print("You're missing some libraries: pip install requests joserfc cryptography")
     sys.exit(1)
 
 
@@ -537,13 +535,11 @@ def cli_account_deactivate(client: ACMEClient, args):
 def cli_key_thumbprint(client: ACMEClient, args):
     thumbprint = client.thumbprint()
     print(f"Your public thumbprint: {thumbprint}")
-    message = """
-
-   Thumbprint - A hash of the public key (per RFC-8555 § 8.3). It is not secret;
-   anyone may know it without compromising the account. It is retrived from a
-   *public* component of your asymmetric key.
-
-""".format(thumbprint)
+    message = textwrap.dedent("""
+        Thumbprint - A hash of the public key (per RFC-8555 § 8.3). It is not secret;
+        anyone may know it without compromising the account. It is retrived from a
+        *public* component of your asymmetric key.
+    """)
     if args.details:
         print(message)
 
@@ -561,16 +557,75 @@ def cli_key_convert(client: ACMEClient, args):
         print(response)
 
 def cli():
+    parser_epilog = textwrap.dedent("""
+    Epilog:
+    [-a | --acme-url] can be either a full https://.../directory, or a keyword:
+        letsencrypt | letsencrypt-staging | goog | goog-staging
+    [-k | --key ] is required for every action of this tool. Point it to the account private key.
+        Private key format supported: JSON Web Token or PEM format.
+
+    ACMEv2 account management - connects to ACMEv2 URL:
+    acmecli.py -k ... account show [-d]              obtain your account_uri and other details.
+    acmecli.py -k ... account create                 create new ACMEv2 account_uri with account key provided upfront.
+    acmecli.py -k ... account deactivate             deactivates your public key and account_uri. Irreversible!
+    acmecli.py -k ... account update                 updates your contact[] list for your account_uri.
+    acmecli.py -k ... account rekey new.pem          re-key your account_uri with new account private key.
+
+    Account private key - offline operation:
+    acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
+    acmecli.py -k ... key convert                    converts your account private key to a different format.
+    """)
     parser = argparse.ArgumentParser(
         prog="acmecli.py",
-        description="ACME client helper."
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=parser_epilog
     )
     parser.add_argument("-v", "--verbose", action='store_true', default=False)
     parser.add_argument("-a", "--acme-url", type=str, default="https://acme-v02.api.letsencrypt.org/directory")
     parser.add_argument("-k", "--key", type=str, required=True, help="Path to the private key file")
     subparsers = parser.add_subparsers(dest="main_action", required=True)
     # Account Parser
-    account_parser = subparsers.add_parser("account", help="Account operations")
+    account_epilog = textwrap.dedent("""
+    acmecli.py -k ... account create \\
+    --eab-kid EAB_KEYID
+    --eab-hmac-key EAB_HMAC_KEY_BASE64
+    --eab-alg {HS256,HS384,HS512}
+    --agree-tos
+
+        Creates a new ACMEv2 account. Before running this, you must generate a key file:
+
+        # RSA key (Standard compatibility)
+        openssl genrsa -out rsa.pem 3072
+
+        # ECDSA - NIST P-256 (Modern standard)
+        openssl ecparam -name prime256v1 -noout -genkey -out p256.pem
+
+        # ECDSA - NIST P-384
+        openssl ecparam -name secp384r1 -noout -genkey -out p384.pem
+
+        # ECDSA - NIST P-521
+        openssl ecparam -name secp521r1 -noout -genkey -out p521.pem
+
+    acmecli.py -k ... account update \\
+    [mailto:user@example.com mailto:admin@example.net ... | clear]
+
+        Updates your contact details. Contacts must be provided as a list.
+        Prefix each contact with `mailto:`.
+        WARNING: The magic word `clear` will remove all current contacts.
+        Per RFC 8555, contacts are OPTIONAL, though some CAs (like pki.goog) require at
+        least one contact.
+
+    acmecli.py -k ... account rekey newkey.pem
+        Rekey your ACMEv2 account with a new private key.
+        WARNING: This will change your key thumbprint but preserve your current account_uri.
+
+    acmecli.py -k ... account deactivate
+        WARNING: This will permanently deactivate your account_uri AND invalidate the
+        associated private key for this provider. You will not be able to reuse this
+        private key on this ACMEv2 server again.
+
+    """)
+    account_parser = subparsers.add_parser("account", help="Account operations", formatter_class=argparse.RawDescriptionHelpFormatter, epilog=account_epilog)
     account_subparsers = account_parser.add_subparsers(dest="account_action", required=True)
     show_parser = account_subparsers.add_parser("show", help="Show account details")
     show_parser.add_argument("-d", "--details", action='store_true')
@@ -587,7 +642,20 @@ def cli():
     deactivate_parser = account_subparsers.add_parser("deactivate", help="Deactivate account")
     deactivate_parser.add_argument("--confirm", action="store_true", help="Confirm deactivation without prompts")
     # Key Parse
-    key_parser = subparsers.add_parser("key", help="Key operations")
+    key_epilog = textwrap.dedent("""
+    Account private key - offline operation:
+    acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
+    acmecli.py -k ... key convert                    converts your account private key to a different format.
+                                         
+    Account private key conversions:
+    acmecli.py -k ... key convert pem   > out.pem    convert to PEM format. Depending on cryptography version, either PKCS#1 or PKCS#8.
+    acmecli.py -k ... key convert pkcs1 > out.pem    convert to PEM encoded as PKCS1. (BEGIN RSA PRIVATE KEY | BEGIN EC PRIVATE KEY).
+    acmecli.py -k ... key convert pkcs8 > out.pem    convert to PEM encoded as PKCS8. (BEGIN PRIVATE KEY).
+    acmecli.py -k ... key convert der1  > out.der    convert to DER encoded as PKCS1. (Binary).
+    acmecli.py -k ... key convert der8  > out.der    convert to DER encoded as PKCS8. (Binary).
+    acmecli.py -k ... key convert json  > out.json   convert to JSON Web Key format. (JSON, for certbot).
+    """)
+    key_parser = subparsers.add_parser("key", help="Key operations", formatter_class=argparse.RawDescriptionHelpFormatter, epilog=key_epilog)
     key_subparsers = key_parser.add_subparsers(dest="key_action", required=True)
     thumbprint_parser = key_subparsers.add_parser("thumbprint", help="Print key thumbprint")
     thumbprint_parser.add_argument("-d", "--details", action='store_true')
