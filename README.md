@@ -30,24 +30,112 @@ Currently, `acmecli.py` does not obtain certificates on its own. Adding this fun
 * This ACMEv2 client **DOES NOT issue** any certificates (yet).
 
 
-## Usage
+## Features
+
+* Creates, deactivate, update, rekey your acme account
+* calculate account key thumbprint and convert to one of: JSON Web Key, PEM or DER, PKCS#1 or PKCS#8.
+
+
+## Usage:
 
 ```text
-Usage:
+usage: acmecli.py [-h] [-v] [-a ACME_URL] -k FILE {account,key} ...
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account show [-d|-detail]
-    Displays your account URI, status, and other details reported by the ACMEv2 server.
+positional arguments:
+  {account,key}
+    account             Account operations
+    key                 Key operations
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account create \
-  --eab-kid EAB_KEYID
-  --eab-hmac-key EAB_HMAC_KEY_BASE64
-  --eab-alg {HS256,HS384,HS512}
-  --agree-tos
+options:
+  -h, --help            show this help message and exit
+  -v, --verbose
+  -a ACME_URL, --acme-url ACME_URL
+  -k FILE, --key FILE   Path to the private key file
 
-    Creates a new ACMEv2 account. Before running this, you must generate a key file.
+Epilog:
+[-a | --acme-url] can be either a full https://.../directory, or a keyword:
+    letsencrypt | letsencrypt-staging | goog | goog-staging
+[-k | --key ] is required for every action of this tool. Point it to the account private key.
+    Private key format supported: JSON Web Token or PEM format.
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account update \
-  [mailto:user@example.com mailto:admin@example.net ... | clear]
+ACMEv2 account management - connects to ACMEv2 URL:
+acmecli.py -k ... account show [-d]              obtain your account_uri and other details.
+acmecli.py -k ... account create                 create new ACMEv2 account_uri with account key provided upfront.
+acmecli.py -k ... account deactivate             deactivates your public key and account_uri. Irreversible!
+acmecli.py -k ... account update                 updates your contact[] list for your account_uri.
+acmecli.py -k ... account rekey new.pem          re-key your account_uri with new account private key.
+
+Account private key - offline operation:
+acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
+acmecli.py -k ... key convert                    converts your account private key to a different format.
+```
+
+### Account key usage
+
+```text
+$ acmecli.py key -h
+usage: acmecli.py key [-h] {thumbprint,convert} ...
+
+positional arguments:
+  {thumbprint,convert}
+    thumbprint          Print key thumbprint
+    convert             Convert key format. Writes to stdout, even binary formats!
+
+options:
+  -h, --help            show this help message and exit
+
+Account private key - offline operation:
+acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
+acmecli.py -k ... key convert                    converts your account private key to a different format.
+
+Account private key conversions:
+acmecli.py -k ... key convert pem   > out.pem    convert to PEM format. Depending on cryptography version, either PKCS#1 or PKCS#8.
+acmecli.py -k ... key convert pkcs1 > out.pem    convert to PEM encoded as PKCS1. (BEGIN RSA PRIVATE KEY | BEGIN EC PRIVATE KEY).
+acmecli.py -k ... key convert pkcs8 > out.pem    convert to PEM encoded as PKCS8. (BEGIN PRIVATE KEY).
+acmecli.py -k ... key convert der1  > out.der    convert to DER encoded as PKCS1. (Binary).
+acmecli.py -k ... key convert der8  > out.der    convert to DER encoded as PKCS8. (Binary).
+acmecli.py -k ... key convert json  > out.json   convert to JSON Web Key format. (JSON, for certbot).
+```
+
+### Account management
+
+```text
+$ ./acmecli.py account -h
+usage: acmecli.py account [-h] {show,update,create,rekey,deactivate} ...
+
+positional arguments:
+  {show,update,create,rekey,deactivate}
+    show                Show account details
+    update              Update account contacts
+    create              Create new account
+    rekey               Change account keys (Rollover)
+    deactivate          Deactivate account
+
+options:
+  -h, --help            show this help message and exit
+
+acmecli.py -k ... account create \
+--eab-kid EAB_KEYID
+--eab-hmac-key EAB_HMAC_KEY_BASE64
+--eab-alg {HS256,HS384,HS512}
+--agree-tos
+
+    Creates a new ACMEv2 account. Before running this, you must generate a key file:
+
+    # RSA key (Standard compatibility)
+    openssl genrsa -out rsa.pem 3072
+
+    # ECDSA - NIST P-256 (Modern standard)
+    openssl ecparam -name prime256v1 -noout -genkey -out p256.pem
+
+    # ECDSA - NIST P-384
+    openssl ecparam -name secp384r1 -noout -genkey -out p384.pem
+
+    # ECDSA - NIST P-521
+    openssl ecparam -name secp521r1 -noout -genkey -out p521.pem
+
+acmecli.py -k ... account update \
+[mailto:user@example.com mailto:admin@example.net ... | clear]
 
     Updates your contact details. Contacts must be provided as a list.
     Prefix each contact with `mailto:`.
@@ -55,32 +143,14 @@ acmecli.py [-a ACME_URL] -k key.(pem|json) account update \
     Per RFC 8555, contacts are OPTIONAL, though some CAs (like pki.goog) require at
     least one contact.
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account rekey new.(pem|json)
+acmecli.py -k ... account rekey newkey.pem
     Rekey your ACMEv2 account with a new private key.
     WARNING: This will change your key thumbprint but preserve your current account_uri.
 
-acmecli.py [-a ACME_URL] -k key.(pem|json) account deactivate
+acmecli.py -k ... account deactivate
     WARNING: This will permanently deactivate your account_uri AND invalidate the
     associated private key for this provider. You will not be able to reuse this
     private key on this ACMEv2 server again.
-
-acmecli.py [-a ACME_URL] -k key.(pem|json) key thumbprint [-d|--detail]
-    Prints your key thumbprint. This is used for stateless `http-01` configurations.
-    See below.
-
-acmecli.py [-a ACME_URL] -k key.(pem|json) key convert <pem|json>
-    Converts keys between formats to facilitate migration between ACME clients.
-    TIP: Most clients use `pem` format, but `certbot` uses the JSON Web Key (JWK) format.
-```
-
-Global parameters:
-```text
-ACME_URL must be one of:
-* The full URL to your ACMEv2 directory, or
-* A short alias: [letsencrypt | letsencrypt-staging | goog | goog-staging]
-
-ACME_URL default value: letsencrypt.org production ACMEv2:
-https://acme-v02.api.letsencrypt.org/directory
 ```
 
 ## ACMEv2 Account Basics
@@ -138,7 +208,7 @@ openssl ecparam -name secp384r1 -noout -genkey -out p384.pem
 # ECDSA - NIST P-521
 openssl ecparam -name secp521r1 -noout -genkey -out p521.pem
 
-# Ed25519 - NOTE: Not currently supported by Let's Encrypt or Google Trust Services
+# Ed25519 - deprecated:
 openssl genpkey -algorithm ed25519 -out ed25519.pem
 ```
 
