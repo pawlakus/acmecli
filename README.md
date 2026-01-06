@@ -50,11 +50,12 @@ is in an early stage, the API is not frozen and may change without notice.
 ## Usage:
 
 ```text
-usage: acmecli.py [-h] [-v] [-a ACME_URL] -k FILE {account,key} ...
+usage: acmecli.py [-h] [-v] [-a ACME_URL] -k FILE {account,dns,key} ...
 
 positional arguments:
-  {account,key}
+  {account,dns,key}
     account             Account operations
+    dns                 DNS helper functions
     key                 Key operations
 
 options:
@@ -69,16 +70,18 @@ Epilog:
 [-k | --key ] is required for every action of this tool. Point it to the account private key.
     Private key format supported: JSON Web Token or PEM format.
 
-ACMEv2 account management - connects to ACMEv2 URL:
-acmecli.py -k ... account show [-d]              obtain your account_uri and other details.
-acmecli.py -k ... account create                 create new ACMEv2 account_uri with account key provided upfront.
-acmecli.py -k ... account deactivate             deactivates your public key and account_uri. Irreversible!
-acmecli.py -k ... account update                 updates your contact[] list for your account_uri.
-acmecli.py -k ... account rekey new.pem          re-key your account_uri with new account private key.
+Connects to ACMEv2 URL, online operations:
+acmecli.py -k ... account show [-d]       obtain your account_uri and other details.
+acmecli.py -k ... account create          create new ACMEv2 account_uri with account key provided upfront.
+acmecli.py -k ... account deactivate      deactivates your public key and account_uri. Irreversible!
+acmecli.py -k ... account update          updates your contact[] list for your account_uri.
+acmecli.py -k ... account rekey new.pem   re-key your account_uri with new account private key.
+acmecli.py -k ... dns records             provide various DNS records for various challenge methods. You have
+                                          to add DNS records to your zone yourself.
 
 Account private key - offline operation:
-acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
-acmecli.py -k ... key convert                    converts your account private key to a different format.
+acmecli.py -k ... key thumbprint [-d]     calculates your account public key thumbprint. for stateless http-01.
+acmecli.py -k ... key convert             converts your account private key to a different format.
 ```
 
 ### Account key usage
