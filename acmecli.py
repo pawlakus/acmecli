@@ -2,6 +2,8 @@
 
 import argparse
 import base64
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -17,13 +19,9 @@ try:
     from joserfc import jws, jwk, errors
     import cryptography.hazmat.primitives.serialization as crypto_hps
     from joserfc import __version__ as joserfc_version
-
-
-
 except ImportError:
     print("You're missing some libraries: pip install requests joserfc cryptography")
     sys.exit(1)
-
 
 __url__ = "https://github.com/pawlakus/acmecli"
 __version__ = "0.1-dev"
@@ -411,45 +409,24 @@ class ACMEClient:
 
 
 def cli_account_show(client: ACMEClient, args):
-    try:
-        account_uri, account_data = client.get_account()
-        print(f"Account URI: {account_uri}")
-        if args.details:
-            print(f"Account status: {account_data.get('status')}")
-            print("Account data:")
-            print(json.dumps(account_data, indent=2))
-    except ACMEAccountDoesNotExist as ex:
-        print(f"Error: Account does not exist: {ex}", file=sys.stderr)
-        sys.exit(1)
-    except ACMEUnauthorized as ex:
-        print(f"Error: Unauthorized: {ex}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as ex:
-        print(ex, file=sys.stderr)
-        sys.exit(1)
+    account_uri, account_data = client.get_account()
+    print(f"Account URI: {account_uri}")
+    if args.details:
+        print(f"Account status: {account_data.get('status')}")
+        print("Account data:")
+        print(json.dumps(account_data, indent=2))
 
 def cli_account_update(client: ACMEClient, args):
-    try:
-        account_uri, _ = client.get_account()
-        response_data = client.update_contact(args.contacts)
-        print(f"Account updated: {account_uri}")
-        print(f"New contacts: {args.contacts}")
-        print(json.dumps(response_data, indent=2))
-    except ACMEAccountDoesNotExist as ex:
-        print(f"Error: Account does not exist: {ex}", file=sys.stderr)
-        sys.exit(1)
-    except ACMEUnauthorized as ex:
-        print(f"Error: Unauthorized: {ex}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as ex:
-        print(ex, file=sys.stderr)
-        sys.exit(1)
+    account_uri, _ = client.get_account()
+    response_data = client.update_contact(args.contacts)
+    print(f"Account updated: {account_uri}")
+    print(f"New contacts: {args.contacts}")
+    print(json.dumps(response_data, indent=2))
 
 def cli_account_create(client: ACMEClient, args):
     try:
         account_uri, _ = client.get_account()
-        print(f"Account already exist: {account_uri}")
-        sys.exit(0)
+        raise ACMEClientError(f"Account already exist: {account_uri}")
     except ACMEAccountDoesNotExist:
         pass
     acme = client.get_metadata()
@@ -471,12 +448,7 @@ def cli_account_create(client: ACMEClient, args):
         print(f"Account created: {account_uri}")
         print(json.dumps(account_data, indent=2))
     except ACMEExternalAccountRequired as ex:
-        print(f"Error: This ACMEv2 server required External Account Binding parameters.", file=sys.stderr)
-        print(ex, file=sys.stderr)
-        sys.exit(1)
-    except Exception as ex:
-        print(ex, file=sys.stderr)
-        sys.exit(1)
+        raise ACMEClientError(f"Error: This ACMEv2 server required External Account Binding parameters: {ex}", file=sys.stderr)
 
 def cli_account_rekey(client: ACMEClient, args):
     if not os.path.exists(args.new_key):
@@ -485,35 +457,20 @@ def cli_account_rekey(client: ACMEClient, args):
     try:
         new_key_signer = JOSESigner.load(args.new_key)
     except ACMEClientError as ex:
-        print(f"Error loading new key: {ex}", file=sys.stderr)
-        sys.exit(1)
+        raise ACMEClientError(f"Error loading new key: {ex}", file=sys.stderr)
     try:
         account_uri, _ = client.get_account()
     except ACMEAccountDoesNotExist as ex:
-        print(f"Error: Unable to rekey: no account exist with the provided key.")
-        print(ex, file=sys.stderr)
-        sys.exit(1)
+        raise ACMEClientError(f"Error: Unable to rekey: no account exist with the provided key.")
     print(f"Rolling over new key for account: {account_uri}")
     print(f"Old Key: {args.key}")
     print(f"New Key: {args.new_key}")
-    try:
-        response_data = client.change_account_key(new_key_signer)
-        print(f"Account rekeyed: {account_uri}")
-        print(json.dumps(response_data, indent=2))
-    except Exception as ex:
-        print(ex, file=sys.stderr)
-        sys.exit(1)
+    response_data = client.change_account_key(new_key_signer)
+    print(f"Account rekeyed: {account_uri}")
+    print(json.dumps(response_data, indent=2))
 
 def cli_account_deactivate(client: ACMEClient, args):
-    try:
-        account_uri, _ = client.get_account()
-    except ACMEAccountDoesNotExist:
-        print("Can not deactivate: account does not exist.")
-        sys.exit(0)
-    except Exception as ex:
-        print(ex, file=sys.stderr)
-        sys.exit(1)
-
+    account_uri, _ = client.get_account()
     if not args.confirm:
         print("!!! WARNING !!!")
         print(f"You are about to deactivate your ACME account: {account_uri}")
@@ -527,13 +484,37 @@ def cli_account_deactivate(client: ACMEClient, args):
             print("Deactivation aborted by user.")
             sys.exit(0)
         args.confirm = True
-    try:
-        response_data = client.deactivate_account(confirm=args.confirm)
-        print(f"Account deactivated: {account_uri}")
-        print(json.dumps(response_data, indent=2))
-    except Exception as ex:
-        print(ex, file=sys.stderr)
-        sys.exit(1)
+    response_data = client.deactivate_account(confirm=args.confirm)
+    print(f"Account deactivated: {account_uri}")
+    print(json.dumps(response_data, indent=2))
+
+def cli_dns_records(client: ACMEClient, args):
+    metadata = client.get_metadata()
+    identity = "UNKNOWN"
+    if "caaIdentities" in metadata["meta"] and len(metadata["meta"]["caaIdentities"]) > 0:
+        identity = metadata["meta"]["caaIdentities"][0]
+    account_uri, account_data = client.get_account()
+    account_status = account_data.get("status", "UNKNOWN")
+    print(f"Account URI: {account_uri}")
+    print(f"Account status: {account_status}")
+    account_uri_sha256 = hashlib.sha256(account_uri.encode()).digest()
+    account_label = base64.b32encode(account_uri_sha256[0:10]).decode().lower()
+    print("General CAA records for this account and ACMEv2 provider:")
+    for zone in args.zone:
+        print(f"{zone}. 600 IN CAA 0   issue     \"{identity}\"")
+        print(f"{zone}. 600 IN CAA 128 issue     \"{identity}; accounturi={account_uri}\"")
+        print(f"{zone}. 600 IN CAA 128 issuewild \"{identity}; accounturi={account_uri}\"")
+    print("")
+    print("dns-persist-01 records for this ACMEv2 account:")
+    for zone in args.zone:
+        print(f"_validation-persist.{zone}. 600 IN TXT \"{identity}; accounturi={account_uri}\"")
+        print(f"_validation-persist.{zone}. 600 IN TXT \"{identity}; accounturi={account_uri}; policy=wildcard\"")
+    print("")
+    print("dns-account-01 records for this ACMEv2 account:")
+    for zone in args.zone:
+        print(f"_{account_label}._acme-challenge.{zone}. 600 IN CNAME xxxx.acme.client.zone.com.")
+        print(f"_{account_label}._acme-challenge.{zone}. 600 IN NS ns1.acme.client.zone.com.")
+        print(f"_{account_label}._acme-challenge.{zone}. 600 IN NS ns2.acme.client.zone.com.")
 
 def cli_key_thumbprint(client: ACMEClient, args):
     thumbprint = client.thumbprint()
@@ -551,7 +532,8 @@ def cli_key_convert(client: ACMEClient, args):
     response = client.get_private_key(format)
     if isinstance(response, bytes):
         if format in {'pem', 'pkcs1', 'pkcs8', 'json'}:
-            print(response.decode("ascii"))
+            sys.stdout.buffer.write(response)
+            sys.stdout.buffer.flush()
         else:
             print("Warning: Binary format chosen, sending binary to stdout. Redirect to a file.", file=sys.stderr)
             sys.stdout.buffer.write(response)
@@ -567,16 +549,19 @@ def cli():
     [-k | --key ] is required for every action of this tool. Point it to the account private key.
         Private key format supported: JSON Web Token or PEM format.
 
-    ACMEv2 account management - connects to ACMEv2 URL:
-    acmecli.py -k ... account show [-d]              obtain your account_uri and other details.
-    acmecli.py -k ... account create                 create new ACMEv2 account_uri with account key provided upfront.
-    acmecli.py -k ... account deactivate             deactivates your public key and account_uri. Irreversible!
-    acmecli.py -k ... account update                 updates your contact[] list for your account_uri.
-    acmecli.py -k ... account rekey new.pem          re-key your account_uri with new account private key.
+    Connects to ACMEv2 URL, online operations:
+    acmecli.py -k ... account show [-d]       obtain your account_uri and other details.
+    acmecli.py -k ... account create          create new ACMEv2 account_uri with account key provided upfront.
+    acmecli.py -k ... account deactivate      deactivates your public key and account_uri. Irreversible!
+    acmecli.py -k ... account update          updates your contact[] list for your account_uri.
+    acmecli.py -k ... account rekey new.pem   re-key your account_uri with new account private key.
+    acmecli.py -k ... dns records             provide various DNS records for various challenge methods. You have
+                                              to add DNS records to your zone yourself.
 
     Account private key - offline operation:
-    acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
-    acmecli.py -k ... key convert                    converts your account private key to a different format.
+    acmecli.py -k ... key thumbprint [-d]     calculates your account public key thumbprint. for stateless http-01.
+    acmecli.py -k ... key convert             converts your account private key to a different format.
+
     """)
     parser = argparse.ArgumentParser(
         prog="acmecli.py",
@@ -639,17 +624,22 @@ def cli():
     create_parser.add_argument("--eab-kid", help="Key Identifier for External Account Binding")
     create_parser.add_argument("--eab-hmac-key", help="HMAC Key for External Account Binding (Base64Url)")
     create_parser.add_argument("--eab-alg", choices=["HS256", "HS384", "HS512"], default="HS256", help="Algorithm for EAB (default: HS256)")
-    create_parser.add_argument("--agree-tos", required=False, default=False, help="Agree to Terms of Service automatically")
+    create_parser.add_argument("--agree-tos", action='store_true', required=False, default=False, help="Agree to Terms of Service automatically")
     rekey_parser = account_subparsers.add_parser("rekey", help="Change account keys (Rollover)")
     rekey_parser.add_argument("new_key", type=str, help="Path to the NEW private key file")
     deactivate_parser = account_subparsers.add_parser("deactivate", help="Deactivate account")
     deactivate_parser.add_argument("--confirm", action="store_true", help="Confirm deactivation without prompts")
+    # DNS
+    dns_parser = subparsers.add_parser("dns", help="DNS helper functions", formatter_class=argparse.RawDescriptionHelpFormatter)
+    dns_subparsers = dns_parser.add_subparsers(dest="dns_action", required=True)
+    dns_records_parser = dns_subparsers.add_parser("records", help="show help how to create DNS records for various challenges")
+    dns_records_parser.add_argument("zone", nargs="*", help="Your DNS zone / FQDN. Can put multiple ones.", default=["example.org"])
     # Key Parse
     key_epilog = textwrap.dedent("""
     Account private key - offline operation:
     acmecli.py -k ... key thumbprint [-d]            calculates your account public key thumbprint. for stateless http-01.
     acmecli.py -k ... key convert                    converts your account private key to a different format.
-                                         
+
     Account private key conversions:
     acmecli.py -k ... key convert pem   > out.pem    convert to PEM format. Depending on cryptography version, either PKCS#1 or PKCS#8.
     acmecli.py -k ... key convert pkcs1 > out.pem    convert to PEM encoded as PKCS1. (BEGIN RSA PRIVATE KEY | BEGIN EC PRIVATE KEY).
@@ -699,11 +689,20 @@ def cli():
                 cli_account_rekey(client, args)
             elif args.account_action == "deactivate":
                 cli_account_deactivate(client, args)
+        elif args.main_action == "dns":
+            if args.dns_action == "records":
+                cli_dns_records(client, args)
         elif args.main_action == "key":
             if args.key_action == "thumbprint":
                 cli_key_thumbprint(client, args)
             elif args.key_action == "convert":
                 cli_key_convert(client, args)
+    except ACMEAccountDoesNotExist as ex:
+        print(f"Error: Account does not exist: {ex}", file=sys.stderr)
+        sys.exit(1)
+    except ACMEUnauthorized as ex:
+        print(f"Error: Unauthorized: {ex}", file=sys.stderr)
+        sys.exit(1)
     except ACMEClientError as ex:
         print(f"ClientError: {ex}", file=sys.stderr)
         sys.exit(1)

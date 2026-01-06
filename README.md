@@ -1,20 +1,33 @@
 # acmecli.py
 
-The `acmecli.py` tool is a lightweight client focused on ACMEv2 account management. It allows you to create, inspect, update, rekey, and deactivate your ACMEv2 account. It also assists in configuring stateless challenges, specifically `http-01` and the experimental `dns-persist-01`.
+The `acmecli.py` tool is a lightweight client focused on ACMEv2 account
+management. It allows you to create, inspect, update, rekey, and deactivate your
+ACMEv2 account. It also assists in configuring stateless challenges,
+specifically `http-01` and the experimental `dns-persist-01`.
 
-You can use this tool to migrate between ACME clients or share a single ACME account across multiple clients or machines. The rationale behind ACME account reuse is detailed in the section **Stateless dns-persist-01**.
+You can use this tool to migrate between ACME clients or share a single ACME
+account across multiple clients or machines. The rationale behind ACME account
+reuse is detailed in the section **Stateless dns-persist-01**.
 
-`acmecli.py` relies on upstream libraries to handle cryptography and network communication:
-* [authlib/joserfc](https://github.com/authlib/joserfc) - [jose.authlib.org](https://jose.authlib.org/en/)
-* [psf/requests](https://github.com/psf/requests) - [requests.readthedocs.io](https://requests.readthedocs.io/en/latest/)
+`acmecli.py` relies on upstream libraries to handle cryptography and network
+communication:
+* [authlib/joserfc](https://github.com/authlib/joserfc) -
+  [jose.authlib.org](https://jose.authlib.org/en/)
+* [psf/requests](https://github.com/psf/requests) -
+  [requests.readthedocs.io](https://requests.readthedocs.io/en/latest/)
 
-This tool do not create any `key.pem` files automatically. To maintain a simple codebase and avoid security concerns related to key generation, you must create your private key yourself. Examples using `openssl` are provided below.
+This tool do not create any `key.pem` files automatically. To maintain a simple
+codebase and avoid security concerns related to key generation, you must create
+your private key yourself. Examples using `openssl` are provided below.
 
-Currently, `acmecli.py` does not obtain certificates on its own. Adding this functionality is planned for a future release. Please note that as this project is in an early stage, the API is not frozen and may change without notice.
+Currently, `acmecli.py` does not obtain certificates on its own. Adding this
+functionality is planned for a future release. Please note that as this project
+is in an early stage, the API is not frozen and may change without notice.
 
 ## Why?
 
-* Easily obtain `thumbprint` for your current ACMEv2 account and setup stateless `http-01` challenge.
+* Easily obtain `thumbprint` for your current ACMEv2 account and setup stateless
+  `http-01` challenge.
 
 * Easily obtain `account_uri` and use it in your `CAA` records:
   ```
@@ -24,16 +37,14 @@ Currently, `acmecli.py` does not obtain certificates on its own. Adding this fun
 * To use `account_uri` for future `dns-persist-01` challenge,
   [see this announcement from Let's Encrypt](https://letsencrypt.org/2025/12/02/from-90-to-45#making-automation-easier-with-a-new-dns-challenge-type)
 
-* To convert, re-use, deactivate and merge many ACMEv2 accounts under one
+* To create, convert, re-use, deactivate and merge many ACMEv2 accounts under one
   `privatekey` and `account_uri` to minimize DNS `CAA` records count.
+
+* To help you create appropriate DNS records, like `CAA` for all methods, and other records for
+  various challenge methods: `dns-persist-01`, `dns-account-01`.
 
 * This ACMEv2 client **DOES NOT issue** any certificates (yet).
 
-
-## Features
-
-* Creates, deactivate, update, rekey your acme account
-* calculate account key thumbprint and convert to one of: JSON Web Key, PEM or DER, PKCS#1 or PKCS#8.
 
 
 ## Usage:
@@ -193,7 +204,9 @@ acmecli.py -k ... account deactivate
 
 ## Create account
 
-This tool does not write files to disk. You must generate your private key manually before creating an account. Use `openssl` version `3.x` or any derivative, like `libressl`, `aws-lc`, etc.
+This tool does not write files to disk. You must generate your private key
+manually before creating an account. Use `openssl` version `3.x` or any
+derivative, like `libressl`, `aws-lc`, etc.
 
 ```bash
 # RSA key (Standard compatibility)
