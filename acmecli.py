@@ -2,7 +2,6 @@
 
 import argparse
 import base64
-import base64
 import hashlib
 import json
 import logging
@@ -10,6 +9,7 @@ import os
 import sys
 import textwrap
 import warnings
+from typing import Optional, Dict, List, Any, Union, Tuple
 
 try:
     # Hack: Supress warning on MacOS xcode-cli-tools python3.9 linked against MacOS libressl.
@@ -35,16 +35,17 @@ class ACMEClientError(ACMEError):pass
 
 class ACMEProtocolError(ACMEError):
     def __init__(self, response):
-        self.status_code = response.status_code
-        self.raw_text = response.text
+        self.status_code: int = response.status_code
+        self.raw_text: str = response.text
+        self.problem: Dict[str, Any] = {}
         try:
             self.problem = response.json()
         except ValueError:
-            self.problem = {}
-        self.type_urn = self.problem.get("type", "unknown:urn")
-        self.title = self.problem.get("title", "unknown")
-        self.detail = self.problem.get("detail", self.raw_text)
-        self.subproblems = self.problem.get("subproblems", [])
+            pass
+        self.type_urn: str = self.problem.get("type", "unknown:urn")
+        self.title: str = self.problem.get("title", "unknown")
+        self.detail: str = self.problem.get("detail", self.raw_text)
+        self.subproblems: List[Dict[str, Any]] = self.problem.get("subproblems", [])
         if self.subproblems:
             msg = f"{self.status_code} {self.type_urn}: {self.title} - {self.detail} (Subproblems: {len(self.subproblems)})"
         else:
@@ -110,12 +111,12 @@ class JOSESigner:
         Use JOSESigner.load() to create instances from files.
         """
         self.jwk = jwk_obj
-        self.alg = None
-        self.crv = None
+        self.alg: Optional[str] = None
+        self.crv: Optional[str] = None
         self._set_algorithm()
 
     @classmethod
-    def load(cls, file_path):
+    def load(cls, file_path: str) -> "JOSESigner":
         if not os.path.exists(file_path):
             raise ACMEClientError(f"Key file not found: {file_path}")
         try:
@@ -138,12 +139,12 @@ class JOSESigner:
         raise ACMEClientError("Unable to identify key format (Valid: PEM or JWK/JSON)")
 
     @classmethod
-    def from_bytes(cls, content):
+    def from_bytes(cls, content: bytes) -> "JOSESigner":
         """Used for checking EAB HMAC keys (Octet)"""
         jwk_obj = jwk.OctKey.import_key(content)
         return cls(jwk_obj)
 
-    def _set_algorithm(self):
+    def _set_algorithm(self) -> None:
         # Mapping per RFC 7518
         ec_algs = {
             "P-256": "ES256", "P-384": "ES384",
@@ -162,23 +163,23 @@ class JOSESigner:
         else:
             raise ACMEClientError("Unsupported private key type.")
 
-    def sign(self, protected_header, payload_str_or_bytes):
+    def sign(self, protected_header: dict, payload_str_or_bytes: Union[str, bytes]) -> dict:
         if "alg" not in protected_header:
             protected_header["alg"] = self.alg
         registry = jws.JWSRegistry(algorithms=[protected_header["alg"]], strict_check_header=False)
         member = {"protected": protected_header}
         return jws.serialize_json(member, payload=payload_str_or_bytes, private_key=self.jwk, registry=registry)
 
-    def get_public_jwk(self):
+    def get_public_jwk(self) -> dict:
         return self.jwk.as_dict(private=False)
 
-    def get_thumbprint(self):
+    def get_thumbprint(self) -> str:
         return self.jwk.thumbprint()
 
-    def as_pem(self):
+    def as_pem(self) -> bytes:
         return self.jwk.as_pem()
 
-    def as_json(self):
+    def as_json(self) -> str:
         return json.dumps(self.jwk.as_dict(), indent=2)
 
 
@@ -189,12 +190,12 @@ class ACMEClient:
         self.key = signer
         self.session = requests.Session()
         self.session.headers['User-Agent'] = f"acmecli/{__version__} ({__url__}) joserfc/{joserfc_version}"
-        self.account_uri = None
-        self.nonce = None
-        self.directory = None
-        self.meta = {}
-        self.external_account_required = False
-        self.terms_of_service_url = None
+        self.account_uri: Optional[str] = None
+        self.nonce: Optional[str] = None
+        self.directory: Optional[Dict[str, Any]] = None
+        self.meta: Dict[str, Any] = {}
+        self.external_account_required: bool = False
+        self.terms_of_service_url: Optional[str] = None
 
     def _check_response(self, response):
         if 200 <= response.status_code < 300:
@@ -448,7 +449,7 @@ def cli_account_create(client: ACMEClient, args):
         print(f"Account created: {account_uri}")
         print(json.dumps(account_data, indent=2))
     except ACMEExternalAccountRequired as ex:
-        raise ACMEClientError(f"Error: This ACMEv2 server required External Account Binding parameters: {ex}", file=sys.stderr)
+        raise ACMEClientError(f"Error: This ACMEv2 server required External Account Binding parameters: {ex}")
 
 def cli_account_rekey(client: ACMEClient, args):
     if not os.path.exists(args.new_key):
@@ -457,7 +458,7 @@ def cli_account_rekey(client: ACMEClient, args):
     try:
         new_key_signer = JOSESigner.load(args.new_key)
     except ACMEClientError as ex:
-        raise ACMEClientError(f"Error loading new key: {ex}", file=sys.stderr)
+        raise ACMEClientError(f"Error loading new key: {ex}")
     try:
         account_uri, _ = client.get_account()
     except ACMEAccountDoesNotExist as ex:
