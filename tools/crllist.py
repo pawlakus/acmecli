@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import sys
 from cryptography import x509
 
 parser = argparse.ArgumentParser()
@@ -7,8 +8,12 @@ parser.add_argument('crl_file', nargs='?', default='crl.pem',
                     help='Path to CRL file (default: crl.pem)')
 args = parser.parse_args()
 
-with open(args.crl_file, 'rb') as f:
-    data = f.read()
+if args.crl_file == '-':
+    data = sys.stdin.buffer.read()
+else:
+    with open(args.crl_file, "rb") as f:
+        data = f.read()
+
 try:
     crl = x509.load_pem_x509_crl(data)
 except ValueError:
