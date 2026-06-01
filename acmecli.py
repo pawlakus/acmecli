@@ -392,7 +392,10 @@ class ACMEClient:
             payload_str_or_bytes=json.dumps(inner_payload, separators=(',', ':'))
         )
         resp = self._request("POST", key_change_url, inner_jws, kid=account_url)
-        return resp.json()
+        try:
+            return resp.json()
+        except json.decoder.JSONDecodeError:
+            self.logger.warning(f"Response was not a proper JSON:{resp.text}")
 
     def deactivate_account(self, confirm=False):
         account_url, _ = self.get_account()
@@ -658,6 +661,7 @@ def cli():
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+    logger = logging.getLogger(f"{__name__}.cli")
 
     # Resolve short ACME URL names
     acme_public_urls = {
@@ -673,7 +677,7 @@ def cli():
 
     # Private key is needed for every action
     if not os.path.exists(args.key):
-        print(f"Error: Private key not found at {args.key}")
+        logger.error(f"Private key not found at {args.key}")
         sys.exit(1)
 
     try:
@@ -699,17 +703,16 @@ def cli():
             elif args.key_action == "convert":
                 cli_key_convert(client, args)
     except ACMEAccountDoesNotExist as ex:
-        print(f"Error: Account does not exist: {ex}", file=sys.stderr)
+        logger.error(f"Account does not exist: {ex}")
         sys.exit(1)
     except ACMEUnauthorized as ex:
-        print(f"Error: Unauthorized: {ex}", file=sys.stderr)
+        logger.error(f"Unauthorized: {ex}")
         sys.exit(1)
     except ACMEClientError as ex:
-        print(f"ClientError: {ex}", file=sys.stderr)
+        logger.error(f"ClientError: {ex}")
         sys.exit(1)
     except Exception as ex:
-        print(f"CRITICAL: Unhandled exception:", file=sys.stderr)
-        print(ex, file=sys.stderr)
+        logger.exception("CRITICAL: Unhandled exception:")
         sys.exit(1)
 
 if __name__ == "__main__":
