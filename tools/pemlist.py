@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import re
+import sys
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
@@ -59,11 +60,14 @@ def describe_certificate(cert: x509.Certificate) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Print readable info from PEM certificates.")
-    parser.add_argument("pem_file", help="PEM file containing one or more certificates.")
+    parser.add_argument("pem_file", help="PEM file containing one or more certificates. Use '-' for stdin.")
     args = parser.parse_args()
 
-    with open(args.pem_file, "rb") as f:
-        data = f.read()
+    if args.pem_file == '-':
+        data = sys.stdin.buffer.read()
+    else:
+        with open(args.pem_file, "rb") as f:
+            data = f.read()
 
     certs = list(load_certificates(data))
     if not certs:
